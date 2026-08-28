@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/**
+ * Tokens de diseño. Todo el color y la tipografía de la interfaz sale de acá.
+ * Tailwind v4 genera las utilidades automáticamente: `--color-panel` habilita
+ * `bg-panel`, `border-panel`, `text-panel`, etc.
+ *
+ * La dirección visual es "instrumento técnico": casi negro con tinte frío,
+ * bordes de un pixel, cifras monoespaciadas, un solo acento. Nada de tarjetas
+ * redondeadas flotando ni gradientes.
+ */
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Superficies, de la más profunda a la más elevada. */
+  --color-abyss: #06090d;
+  --color-canvas: #0a0f15;
+  --color-panel: #0e141c;
+  --color-raised: #141d27;
+  --color-hover: #1a2531;
+
+  /* Líneas. `line` es el hairline por defecto; `edge` marca lo activo. */
+  --color-line: #1b2530;
+  --color-edge: #2a3947;
+
+  /* Texto. */
+  --color-ink: #dde5ed;
+  --color-ink-soft: #93a3b3;
+  --color-ink-dim: #5c6d7e;
+
+  /* Acentos. `signal` es la interacción, `alert` es "fuera del plano". */
+  --color-signal: #45c0f5;
+  --color-alert: #f0a63c;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* Le dice al navegador que pinte scrollbars, inputs y controles nativos en
+   oscuro. Sin esto el scrollbar del modal sale blanco y rompe el borde. */
+html {
+  color-scheme: dark;
+}
+
+/* Scrollbars finas, del color de los bordes. El borde transparente con
+   background-clip deja aire alrededor del pulgar. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-edge);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #3d5165;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--color-abyss);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Cifras alineadas en columna en toda la app, sin repetir la clase. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* El <dialog> nativo trae márgenes y borde de agente de usuario. */
+dialog {
+  margin: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+}
+
+dialog::backdrop {
+  background: rgb(3 6 10 / 0.78);
+  backdrop-filter: blur(3px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  dialog[open] {
+    animation: dialog-in 140ms cubic-bezier(0.2, 0, 0.2, 1);
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}

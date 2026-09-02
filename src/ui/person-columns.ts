@@ -1,4 +1,5 @@
 import type { Person } from "../core/occupancy/types";
+import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 
 /**
  * Columnas de la tabla de personas.
@@ -9,15 +10,29 @@ import type { Person } from "../core/occupancy/types";
  *
  *   { key: "gerencia", header: "Gerencia", value: (p) => String(p.extra?.gerencia ?? "—") }
  */
+
+/**
+ * Lo que la tabla sabe y una columna sola no puede deducir. Hoy es solo el
+ * rótulo de zona, que depende del catálogo que recibe el visor.
+ */
+export interface PersonColumnContext {
+  /** Zona legible: descripción → nombre → id. */
+  zoneLabel: ZoneLabeller;
+}
+
+export const DEFAULT_COLUMN_CONTEXT: PersonColumnContext = {
+  zoneLabel: RAW_ZONE_LABEL,
+};
+
 export interface PersonColumn {
   key: string;
   header: string;
-  value: (person: Person) => string;
+  value: (person: Person, ctx: PersonColumnContext) => string;
   /**
    * Cómo se pinta la celda:
    *   text  — texto normal (por defecto)
    *   mono  — monoespaciado y alineado a la derecha; para RUT, horas, códigos
-   *   chip  — pastilla; para categorías cortas como la zona
+   *   chip  — pastilla; para categorías como la zona
    */
   variant?: "text" | "mono" | "chip";
   /** Ancho de la columna (cualquier valor CSS). Sin esto reparte el sobrante. */
@@ -49,7 +64,8 @@ export function formatElapsed(iso: string, now: number): string {
 export const PERSON_COLUMNS: PersonColumn[] = [
   { key: "name", header: "Nombre", value: (p) => p.name },
   { key: "id", header: "RUT", value: (p) => p.id, variant: "mono", width: "8.5rem" },
-  { key: "zoneId", header: "Zona", value: (p) => p.zoneId, variant: "chip", width: "5rem" },
+  // Sin ancho fijo: el rótulo de una zona con nombre no cabe en 5rem.
+  { key: "zoneId", header: "Zona", value: (p, ctx) => ctx.zoneLabel(p.zoneId), variant: "chip" },
   {
     key: "detectedAt",
     header: "Detección",

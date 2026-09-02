@@ -1,12 +1,19 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { formatZoneIds } from "../core/dxf/zones";
 import { aggregateOccupancy } from "../core/occupancy/aggregate";
+import {
+  formatZoneLabels,
+  makeZoneLabeller,
+  type ZoneCatalog,
+} from "../core/occupancy/zone-names";
 import { usePeople } from "../data/people-context";
 import { usePlanQuery } from "../data/use-plan-query";
 import { DARK_THEME, rampColor } from "../core/render/theme";
 import { PeopleDialog } from "./PeopleDialog";
+import type { PeopleTableComponent } from "./PeopleTable";
 import { PlanCanvas } from "./PlanCanvas";
 import { Sidebar, type Selection } from "./Sidebar";
+import { useFullscreen } from "./use-fullscreen";
 
 /**
  * ── EL COMPONENTE ─────────────────────────────────────────────────────────────
@@ -25,12 +32,40 @@ export interface PlanOccupancyViewerProps {
   /** Título de la cabecera. Pasar `null` la oculta y deja solo plano + panel. */
   title?: string | null;
   className?: string;
+  /**
+   * Cómo se llaman las zonas. El plano solo conoce ids ("85", "81-82"), que no
+   * le dicen nada a quien mira la pantalla. Con esto cada id se muestra como su
+   * descripción, o su nombre si no hay descripción, o el id si no hay ninguno:
+   *
+   *   <PlanOccupancyViewer
+   *     planUrl="/plano.dxf"
+   *     zones={{ "85": { description: "Galería 4 Norte — Nivel 320" } }}
+   *   />
+   *
+   * Si su sistema ya manda la descripción de la zona en `Person.extra`
+   * (`zonaDescripcion`, `zoneDescription`, `zonaNombre`…), no hace falta pasar
+   * nada: se toma de ahí. Ver `src/core/occupancy/zone-names.ts`.
+   */
+  zones?: ZoneCatalog;
+  /**
+   * Tabla de personas del modal. Por defecto la del repo. Cualquier componente
+   * con la firma `PeopleTableComponent` sirve — es el punto de salida si
+   * necesitan su propio data-grid, exportar, ordenar por columna, etc.
+   *
+   *   <PlanOccupancyViewer planUrl="/plano.dxf" table={MiTabla} />
+   */
+  table?: PeopleTableComponent;
+  /** Botón de pantalla completa en la cabecera. */
+  allowFullscreen?: boolean;
 }
 
 export function PlanOccupancyViewer({
   planUrl,
   title = "Ocupación por zonas",
   className = "",
+  zones,
+  table,
+  allowFullscreen = true,
 }: PlanOccupancyViewerProps) {
   const plan = usePlanQuery(planUrl);
   const { label, people, isFetching, error, updatedAt, refresh } = usePeople();
@@ -38,11 +73,19 @@ export function PlanOccupancyViewer({
   const [selection, setSelection] = useState<Selection>(null);
   const [showBaseText, setShowBaseText] = useState(true);
 
+  // La pantalla completa se pide sobre la raíz del componente, no sobre el
+  // documento: así el visor embebido en una página ajena se expande solo él y
+  // se lleva su cabecera, su panel y su modal.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const fullscreen = useFullscreen(rootRef);
+
   const doc = plan.data ?? null;
   const occupancy = useMemo(
     () => (doc ? aggregateOccupancy(people, doc.zoneLayers) : null),
     [people, doc],
   );
+
+  const zoneLabel = useMemo(() => makeZoneLabeller(zones, people), [zones, people]);
 
   const detail = useMemo(() => {
     if (!occupancy || !doc || !selection) return null;
@@ -52,7 +95,9 @@ export function PlanOccupancyViewer({
         title: "Otras zonas",
         subtitle:
           occupancy.other.zoneIds.length > 0
-            ? `Zonas sin polígono en el plano: ${occupancy.other.zoneIds.join(", ")}`
+            ? `Zonas sin polígono en el plano: ${occupancy.other.zoneIds
+                .map(zoneLabel)
+                .join(", ")}`
             : "Sin personas fuera del plano",
         people: occupancy.other.people,
         empty: "No hay personas en zonas fuera del plano.",
@@ -67,20 +112,25 @@ export function PlanOccupancyViewer({
     const share =
       occupancy.maxLayerCount > 0 ? bucket.count / occupancy.maxLayerCount : 0;
 
+    // El título es el nombre de la zona; el subtítulo guarda la capa y los ids
+    // crudos, que es lo que sirve para cruzar con el sistema de detección.
     return {
-      title: `Zona ${formatZoneIds(layer.zoneIds)}`,
+      title: formatZoneLabels(layer.zoneIds, zoneLabel),
       subtitle:
         layer.zoneIds.length > 1
-          ? `Capa ${layer.layer} — agrupa ${layer.zoneIds.length} zonas`
-          : `Capa ${layer.layer}`,
+          ? `Capa ${layer.layer} — agrupa ${layer.zoneIds.length} zonas: ${formatZoneIds(layer.zoneIds)}`
+          : `Capa ${layer.layer} — zona ${layer.zoneIds[0]}`,
       people: bucket.people,
       empty: "No hay personas detectadas en esta zona.",
       accent: bucket.count === 0 ? "#3d4a58" : rampColor(DARK_THEME.densityRamp, share),
     };
-  }, [selection, occupancy, doc]);
+  }, [selection, occupancy, doc, zoneLabel]);
 
   return (
-    <div className={`flex h-full min-h-0 flex-col bg-canvas text-ink ${className}`}>
+    <div
+      ref={rootRef}
+      className={`flex h-full min-h-0 flex-col bg-canvas text-ink ${className}`}
+    >
       {title !== null && (
         <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-panel px-4 py-2.5">
           <div className="mr-auto min-w-0">
@@ -122,6 +172,25 @@ export function PlanOccupancyViewer({
           >
             {isFetching ? "Actualizando…" : "Actualizar"}
           </button>
+
+          {allowFullscreen && fullscreen.supported && (
+            <button
+              type="button"
+              onClick={fullscreen.toggle}
+              aria-pressed={fullscreen.isFullscreen}
+              aria-label={
+                fullscreen.isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"
+              }
+              title={
+                fullscreen.isFullscreen
+                  ? "Salir de pantalla completa (Esc)"
+                  : "Pantalla completa"
+              }
+              className="rounded-sm border border-line p-1.5 text-ink-soft transition-colors hover:border-edge hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
+            >
+              {fullscreen.isFullscreen ? <CollapseIcon /> : <ExpandIcon />}
+            </button>
+          )}
         </header>
       )}
 
@@ -146,7 +215,29 @@ export function PlanOccupancyViewer({
               selectedLayer={selection?.kind === "layer" ? selection.layer : null}
               onSelectLayer={(layer) => setSelection(layer ? { kind: "layer", layer } : null)}
               showBaseText={showBaseText}
+              zoneLabel={zoneLabel}
             />
+          )}
+
+          {/* Sin cabecera no hay dónde poner el botón, así que flota sobre el
+              plano. Arriba a la derecha: los controles de cámara van abajo. */}
+          {title === null && allowFullscreen && fullscreen.supported && (
+            <button
+              type="button"
+              onClick={fullscreen.toggle}
+              aria-pressed={fullscreen.isFullscreen}
+              aria-label={
+                fullscreen.isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"
+              }
+              title={
+                fullscreen.isFullscreen
+                  ? "Salir de pantalla completa (Esc)"
+                  : "Pantalla completa"
+              }
+              className="absolute top-3 right-3 grid size-8 place-items-center rounded-sm border border-line bg-panel/90 text-ink-soft backdrop-blur-[2px] transition-colors hover:border-edge hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
+            >
+              {fullscreen.isFullscreen ? <CollapseIcon /> : <ExpandIcon />}
+            </button>
           )}
         </section>
 
@@ -157,6 +248,7 @@ export function PlanOccupancyViewer({
               occupancy={occupancy}
               selection={selection}
               onSelect={setSelection}
+              zoneLabel={zoneLabel}
             />
           )}
         </aside>
@@ -170,10 +262,36 @@ export function PlanOccupancyViewer({
         people={detail?.people ?? []}
         emptyMessage={detail?.empty ?? ""}
         accent={detail?.accent}
+        zoneLabel={zoneLabel}
+        table={table}
       />
     </div>
   );
 }
+
+function ExpandIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-3.5" {...ICON_STROKE} aria-hidden>
+      <path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" />
+    </svg>
+  );
+}
+
+function CollapseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-3.5" {...ICON_STROKE} aria-hidden>
+      <path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5" />
+    </svg>
+  );
+}
+
+const ICON_STROKE = {
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.4,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
 
 function Centered({
   children,

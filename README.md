@@ -35,11 +35,15 @@ dónde salen las personas: las lee del contexto que le da el proveedor.
   círculos, elipses, splines, textos y bloques (`INSERT`) expandidos.
 - Interpreta el resto de capas como **zonas**, las rellena con un color según su
   densidad de personas y les pone encima una insignia con el conteo.
+- Muestra cada zona por su **nombre**, no por su id: usa la descripción, o el
+  nombre si no hay descripción, o el id si no hay ninguno de los dos.
 - Clic en una zona (en el plano o en la lista lateral) → modal con la tabla de
-  personas, filtrable.
+  personas, filtrable. La tabla es reemplazable por la suya.
 - Panel **"Otras zonas"**: total de personas cuya zona no está dibujada en el
   plano, con su propia tabla. Nunca se descartan en silencio.
-- Pan, zoom, ajuste a la vista y enfoque automático a la zona seleccionada.
+- Pan, zoom, ajuste a la vista y enfoque automático a la zona seleccionada, más
+  un panel de cámara con indicador de zoom y atajos de teclado (`+`, `−`, `0`, `F`).
+- **Pantalla completa** del componente entero, no de la pestaña.
 - Refresco automático con TanStack Query, manteniendo los últimos conteos
   buenos mientras la petición está en vuelo.
 
@@ -75,6 +79,7 @@ src/
     occupancy/
       types.ts              Person, PeopleSource — EL CONTRATO con su sistema
       aggregate.ts          personas[] → conteo por capa + "otras zonas"
+      zone-names.ts         id de zona → descripción / nombre / id
     render/
       viewport.ts           Matemática de pan/zoom (world ↔ screen)
       theme.ts              Todos los colores
@@ -88,11 +93,12 @@ src/
     source.ts               URL del plano e intervalo de refresco
   ui/                       ← React. Reemplazable por completo.
     PlanOccupancyViewer.tsx ← EL COMPONENTE que montan en su app
-    PlanCanvas.tsx          Canvas + insignias HTML
+    PlanCanvas.tsx          Canvas + insignias HTML + panel de cámara
     Sidebar.tsx             Resumen, "otras zonas", lista de zonas
     PeopleDialog.tsx        Modal (<dialog> nativo)
-    PeopleTable.tsx         Tabla
+    PeopleTable.tsx         Tabla por defecto + el contrato para reemplazarla
     person-columns.ts       Columnas de la tabla (agregar campos acá)
+    use-fullscreen.ts       Pantalla completa sobre la raíz del componente
 ```
 
 Regla que se respeta en todo el repo: **`src/core` no importa nada de `src/ui`**.
@@ -112,7 +118,18 @@ reales, accesibles por teclado, y se estilan con CSS normal.
 
 **El detalle es un `<dialog>` nativo, no una librería de modales.** El navegador
 ya da trampa de foco, cierre con Escape, fondo inerte y semántica de modal. Una
-dependencia menos que sacar, y accesible por defecto.
+dependencia menos que sacar, y accesible por defecto. De yapa vive en la *top
+layer*, así que sigue apareciendo por encima del visor en pantalla completa —
+un modal hecho con divs quedaría tapado.
+
+**La pantalla completa se pide sobre la raíz del componente, no sobre el
+documento.** Embebido en una página ajena, el visor se expande solo él y se
+lleva su cabecera, su panel y su modal. Dentro de un `<iframe>` hace falta
+`allow="fullscreen"`; sin eso el botón no se dibuja en vez de quedar inerte.
+
+**La tabla del modal es intercambiable.** El visor recibe el componente por
+prop (`table`), así que un equipo que necesite su propio data-grid no tiene que
+bifurcar nada. El contrato es de tres campos.
 
 **El proveedor de datos envuelve al visor.** Así el andamio de datos de ejemplo
 se borra sin tocar el visor: se cambia un componente por el suyo y listo. El

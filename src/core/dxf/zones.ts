@@ -30,7 +30,13 @@ export function parseZoneLayer(layer: string): string[] | null {
   return [...new Set(parts)];
 }
 
-/** Human label for a zone group: "81-82" reads as "Zonas 81 · 82". */
-export function formatZoneIds(zoneIds: string[]): string {
+/**
+ * The raw ids of a zone group: "81-82" reads as "81 · 82".
+ *
+ * This is the debugging label. What the user actually reads is resolved by
+ * `formatZoneLabels` in `src/core/occupancy/zone-names.ts`, which prefers the
+ * zone's description or name and only falls back to these ids.
+ */
+export function formatZoneIds(zoneIds: readonly string[]): string {
   return zoneIds.join(" · ");
 }

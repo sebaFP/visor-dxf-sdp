@@ -91,6 +91,17 @@ body {
   font-feature-settings: "tnum";
 }
 
+/* El elemento en pantalla completa se pinta sobre un fondo negro del navegador.
+   Si el visor no lo cubre entero (relación de aspecto distinta a la pantalla),
+   ese negro se cuela por los bordes y no coincide con el tema. */
+:fullscreen {
+  background: var(--color-canvas);
+}
+
+::backdrop {
+  background: var(--color-abyss);
+}
+
 /* El <dialog> nativo trae márgenes y borde de agente de usuario. */
 dialog {
   margin: auto;

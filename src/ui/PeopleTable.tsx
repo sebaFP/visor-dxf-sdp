@@ -1,30 +1,59 @@
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState, type ComponentType } from "react";
 import type { Person } from "../core/occupancy/types";
-import { PERSON_COLUMNS, formatElapsed, type PersonColumn } from "./person-columns";
+import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
+import {
+  PERSON_COLUMNS,
+  formatElapsed,
+  type PersonColumn,
+  type PersonColumnContext,
+} from "./person-columns";
 
 export interface PeopleTableProps {
   people: Person[];
   emptyMessage: string;
+  /**
+   * Zona legible: descripción → nombre → id. Sin esto se muestra el id crudo.
+   * El visor siempre lo pasa; solo importa si montan la tabla por su cuenta.
+   */
+  zoneLabel?: ZoneLabeller;
 }
+
+/**
+ * Contrato de una tabla de personas.
+ *
+ * Cualquier componente con esta firma sirve como reemplazo — pásenlo por la
+ * prop `table` de `<PlanOccupancyViewer>` (o de `<PeopleDialog>`) y el visor
+ * usa el suyo en vez de este. Es el punto de salida si necesitan su propio
+ * data-grid, exportar a Excel, agrupar, ordenar por columna, etc.
+ *
+ *   <PlanOccupancyViewer planUrl="/plano.dxf" table={MiTablaDeAgGrid} />
+ */
+export type PeopleTableComponent = ComponentType<PeopleTableProps>;
 
 /**
  * Tabla plana, sin librería de data-grid: una dependencia menos que sacar
  * después. Las columnas salen de PERSON_COLUMNS, así que agregar un campo es
  * una línea y no tocar este archivo.
  */
-export function PeopleTable({ people, emptyMessage }: PeopleTableProps) {
+export function PeopleTable({
+  people,
+  emptyMessage,
+  zoneLabel = RAW_ZONE_LABEL,
+}: PeopleTableProps) {
   const [query, setQuery] = useState("");
   // Con cientos de filas, filtrar en cada tecla trababa el input.
   const deferredQuery = useDeferredValue(query);
   const now = Date.now();
 
+  const ctx = useMemo<PersonColumnContext>(() => ({ zoneLabel }), [zoneLabel]);
+
   const filtered = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
     if (!q) return people;
     return people.filter((p) =>
-      PERSON_COLUMNS.some((col) => col.value(p).toLowerCase().includes(q)),
+      PERSON_COLUMNS.some((col) => col.value(p, ctx).toLowerCase().includes(q)),
     );
-  }, [people, deferredQuery]);
+  }, [people, deferredQuery, ctx]);
 
   if (people.length === 0) {
     return <Empty>{emptyMessage}</Empty>;
@@ -88,7 +117,7 @@ export function PeopleTable({ people, emptyMessage }: PeopleTableProps) {
 
                 {PERSON_COLUMNS.map((col) => (
                   <td key={col.key} className={cellClass(col, "py-2")}>
-                    <Cell column={col} person={person} />
+                    <Cell column={col} person={person} ctx={ctx} />
                   </td>
                 ))}
 
@@ -115,15 +144,23 @@ function cellClass(col: PersonColumn, base: string): string {
   return `${base} ${align} ${responsive}`;
 }
 
-function Cell({ column, person }: { column: PersonColumn; person: Person }) {
-  const value = column.value(person);
+function Cell({
+  column,
+  person,
+  ctx,
+}: {
+  column: PersonColumn;
+  person: Person;
+  ctx: PersonColumnContext;
+}) {
+  const value = column.value(person, ctx);
 
   if (column.variant === "mono") {
     return <span className="tnum font-mono text-[13px] text-ink-soft">{value}</span>;
   }
   if (column.variant === "chip") {
     return (
-      <span className="tnum inline-flex min-w-[2.5rem] justify-center rounded-sm border border-edge bg-raised px-1.5 py-0.5 font-mono text-[12px] text-ink-soft">
+      <span className="inline-flex min-w-[2.5rem] justify-center rounded-sm border border-edge bg-raised px-1.5 py-0.5 text-[12px] text-ink-soft">
         {value}
       </span>
     );

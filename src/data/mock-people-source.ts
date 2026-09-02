@@ -42,6 +42,18 @@ const ROLES = [
 /** Zones that exist in the detection system but are not drawn on this plan. */
 const UNMAPPED_ZONES = ["12", "34", "58", "99", "310", "412"];
 
+/**
+ * Pieces of a zone name. The viewer shows `extra.zonaDescripcion` instead of the
+ * bare id wherever a zone is named — see `src/core/occupancy/zone-names.ts` —
+ * so the sample data carries one to exercise that path.
+ */
+const ZONE_KINDS = [
+  "Galería", "Rampa", "Sala", "Taller", "Estación", "Bodega",
+  "Chancado", "Pique", "Refugio", "Comedor", "Acceso", "Subestación",
+];
+
+const ZONE_QUALIFIERS = ["Norte", "Sur", "Oriente", "Poniente", "Central", "Principal", "Auxiliar"];
+
 /** Mulberry32 — tiny, fast, good enough for demo data. */
 function makeRandom(seed: number): () => number {
   let a = seed >>> 0;
@@ -70,6 +82,27 @@ function makeRut(rand: () => number): string {
   const rest = 11 - (sum % 11);
   const dv = rest === 11 ? "0" : rest === 10 ? "K" : String(rest);
   return `${body.toLocaleString("es-CL").replace(/,/g, ".")}-${dv}`;
+}
+
+/**
+ * Stable name and description for a zone, derived from its id.
+ *
+ * Derived and not drawn from a fixed list so it survives any plan: the same id
+ * always produces the same text, across refreshes and reloads, and the id stays
+ * inside it so a zone on screen can still be traced back to the DXF layer.
+ */
+function zoneNaming(zoneId: string): { ZONA: string; ZONA_DESCRIPCION: string } {
+  let hash = 2166136261;
+  for (let i = 0; i < zoneId.length; i++) {
+    hash = Math.imul(hash ^ zoneId.charCodeAt(i), 16777619);
+  }
+  const rand = makeRandom(hash);
+  const kind = pick(rand, ZONE_KINDS);
+  const qualifier = pick(rand, ZONE_QUALIFIERS);
+  return {
+    ZONA: `${kind} ${zoneId}`,
+    ZONA_DESCRIPCION: `${kind} ${qualifier} ${zoneId}`,
+  };
 }
 
 export interface MockOptions {
@@ -118,6 +151,10 @@ export function generatePeople(options: MockOptions): Person[] {
         area: pick(rand, AREAS),
         cargo: pick(rand, ROLES),
         tag: `TAG-${1000 + Math.floor(rand() * 9000)}`,
+        // Nombres del esquema de referencia (ID_ZONA / ZONA / ZONA_DESCRIPCION).
+        // El visor los detecta solos y rotula la zona con ellos en vez de
+        // mostrar el id crudo; ID_ZONA es `zoneId` y por eso no va acá.
+        ...zoneNaming(zoneId),
       },
     });
   }

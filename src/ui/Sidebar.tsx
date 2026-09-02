@@ -2,6 +2,11 @@ import type { DxfDocument } from "../core/dxf/types";
 import { formatZoneIds } from "../core/dxf/zones";
 import { compareZoneIds } from "../core/occupancy/aggregate";
 import type { OccupancySnapshot } from "../core/occupancy/types";
+import {
+  formatZoneLabels,
+  RAW_ZONE_LABEL,
+  type ZoneLabeller,
+} from "../core/occupancy/zone-names";
 import { DARK_THEME, rampColor } from "../core/render/theme";
 
 /** Qué está mostrando el modal. */
@@ -12,9 +17,17 @@ export interface SidebarProps {
   occupancy: OccupancySnapshot;
   selection: Selection;
   onSelect: (selection: Selection) => void;
+  /** Zona legible: descripción → nombre → id. */
+  zoneLabel?: ZoneLabeller;
 }
 
-export function Sidebar({ doc, occupancy, selection, onSelect }: SidebarProps) {
+export function Sidebar({
+  doc,
+  occupancy,
+  selection,
+  onSelect,
+  zoneLabel = RAW_ZONE_LABEL,
+}: SidebarProps) {
   const layers = [...doc.zoneLayers].sort((a, b) => {
     const ca = occupancy.byLayer.get(a.layer)?.count ?? 0;
     const cb = occupancy.byLayer.get(b.layer)?.count ?? 0;
@@ -53,7 +66,7 @@ export function Sidebar({ doc, occupancy, selection, onSelect }: SidebarProps) {
         <p className="mt-1 truncate text-[11px] text-ink-dim">
           {occupancy.other.zoneIds.length === 0
             ? "Todas las personas están en zonas del plano"
-            : `Sin polígono · ${occupancy.other.zoneIds.join(", ")}`}
+            : `Sin polígono · ${occupancy.other.zoneIds.map(zoneLabel).join(", ")}`}
         </p>
       </button>
 
@@ -67,6 +80,19 @@ export function Sidebar({ doc, occupancy, selection, onSelect }: SidebarProps) {
           const active = selection?.kind === "layer" && selection.layer === zl.layer;
           const share = occupancy.maxLayerCount > 0 ? count / occupancy.maxLayerCount : 0;
           const accent = count === 0 ? "#3d4a58" : rampColor(DARK_THEME.densityRamp, share);
+
+          // Lo que se lee es el nombre de la zona. La segunda línea solo
+          // aparece cuando agrega algo: la capa cuando agrupa varias zonas, o
+          // los ids crudos cuando un nombre los reemplazó — sin eso, rastrear
+          // una zona del plano hasta su id en el sistema sería adivinanza.
+          const label = formatZoneLabels(zl.zoneIds, zoneLabel);
+          const ids = formatZoneIds(zl.zoneIds);
+          const sub =
+            zl.zoneIds.length > 1
+              ? `capa ${zl.layer} · ${zl.zoneIds.length} zonas: ${ids}`
+              : label !== ids
+                ? `zona ${ids}`
+                : null;
 
           return (
             <button
@@ -97,13 +123,11 @@ export function Sidebar({ doc, occupancy, selection, onSelect }: SidebarProps) {
               />
 
               <span className="relative min-w-0 flex-1">
-                <span className="block truncate text-[13px] text-ink">
-                  {formatZoneIds(zl.zoneIds)}
+                <span className="block truncate text-[13px] text-ink" title={label}>
+                  {label}
                 </span>
-                {zl.zoneIds.length > 1 && (
-                  <span className="block truncate text-[10.5px] text-ink-dim">
-                    capa {zl.layer} · {zl.zoneIds.length} zonas agrupadas
-                  </span>
+                {sub && (
+                  <span className="block truncate text-[10.5px] text-ink-dim">{sub}</span>
                 )}
               </span>
 

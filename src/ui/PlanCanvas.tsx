@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DxfDocument, Vec2 } from "../core/dxf/types";
 import type { OccupancySnapshot } from "../core/occupancy/types";
+import {
+  formatZoneLabels,
+  RAW_ZONE_LABEL,
+  type ZoneLabeller,
+} from "../core/occupancy/zone-names";
 import { PlanRenderer, type ZoneStyle } from "../core/render/plan-renderer";
 import { DARK_THEME, rampColor } from "../core/render/theme";
 import {
@@ -17,6 +22,8 @@ import {
 /** Drag further than this (px) and the pointer-up is a pan, not a click. */
 const CLICK_SLOP = 4;
 const ZOOM_STEP = 1.25;
+/** Step used by the buttons — coarser than the wheel so one click is felt. */
+const BUTTON_ZOOM_STEP = 1.6;
 /**
  * Minimum screen distance between two count badges. The sample plan stacks four
  * levels vertically, so zoomed out a dozen badges land on the same 40 px — the
@@ -24,6 +31,8 @@ const ZOOM_STEP = 1.25;
  */
 const BADGE_MIN_DISTANCE = 44;
 const CAMERA_MS = 320;
+/** Padding used when framing the whole drawing. Also the 1x of the zoom read-out. */
+const FIT_PADDING = 48;
 
 export interface PlanCanvasProps {
   doc: DxfDocument;
@@ -33,6 +42,8 @@ export interface PlanCanvasProps {
   /** When set, layers outside the set are dimmed. */
   highlightLayers?: Set<string> | null;
   showBaseText: boolean;
+  /** Human zone label: description -> name -> id. */
+  zoneLabel?: ZoneLabeller;
 }
 
 interface Badge {
@@ -50,6 +61,7 @@ export function PlanCanvas({
   onSelectLayer,
   highlightLayers = null,
   showBaseText,
+  zoneLabel = RAW_ZONE_LABEL,
 }: PlanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -62,8 +74,19 @@ export function PlanCanvas({
   // Badges live in React state because they are HTML, not canvas — crisp text,
   // real hover/focus, and keyboard reachable for free.
   const [badges, setBadges] = useState<Badge[]>([]);
+  /** Current scale as a multiple of "the whole plan fits on screen". */
+  const [zoom, setZoom] = useState(1);
 
   const renderer = useMemo(() => new PlanRenderer(doc, DARK_THEME), [doc]);
+
+  /** The "everything visible" camera. Null until the container is measured. */
+  const fitViewport = useMemo(
+    () =>
+      size.width > 0
+        ? fitBounds(doc.fitBounds, size.width, size.height, FIT_PADDING)
+        : null,
+    [doc, size],
+  );
 
   const zoneStyles = useMemo(() => {
     const styles = new Map<string, ZoneStyle>();
@@ -85,6 +108,10 @@ export function PlanCanvas({
     const vp = viewportRef.current;
     const { width, height } = size;
     if (width === 0) return;
+
+    // El indicador de zoom se refresca acá y no en su propio efecto: este paso
+    // ya provoca un render por frame, así que no cuesta nada extra.
+    if (fitViewport) setZoom(vp.scale / fitViewport.scale);
 
     const candidates: Badge[] = [];
     for (const zl of doc.zoneLayers) {
@@ -117,7 +144,7 @@ export function PlanCanvas({
       if (!collides) next.push(badge);
     }
     setBadges(next);
-  }, [doc, occupancy, size, selectedLayer]);
+  }, [doc, occupancy, size, selectedLayer, fitViewport]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -189,9 +216,35 @@ export function PlanCanvas({
   }, []);
 
   const resetView = useCallback(() => {
-    if (size.width === 0) return;
-    animateTo(fitBounds(doc.fitBounds, size.width, size.height, 48));
-  }, [doc, size, animateTo]);
+    if (fitViewport) animateTo(fitViewport);
+  }, [fitViewport, animateTo]);
+
+  const zoneFor = useCallback(
+    (layer: string) => doc.zoneLayers.find((zl) => zl.layer === layer) ?? null,
+    [doc],
+  );
+
+  /** Frame the selected zone on demand — the button under "ajustar al plano". */
+  const focusSelection = useCallback(() => {
+    if (!selectedLayer || size.width === 0) return;
+    const zone = zoneFor(selectedLayer);
+    if (!zone) return;
+    animateTo(focusBounds(zone.focusBounds, size.width, size.height));
+  }, [selectedLayer, size, zoneFor, animateTo]);
+
+  /** Zoom around the middle of the canvas, which is what a button implies. */
+  const zoomFromButton = useCallback(
+    (factor: number) => {
+      if (size.width === 0) return;
+      viewportRef.current = zoomAt(
+        viewportRef.current,
+        { x: size.width / 2, y: size.height / 2 },
+        factor,
+      );
+      scheduleDraw();
+    },
+    [size, scheduleDraw],
+  );
 
   // Fly to a zone when it becomes the selection, but only if it is off-screen
   // or too small to read — otherwise the view jumping around is just annoying.
@@ -255,6 +308,19 @@ export function PlanCanvas({
     return () => el.removeEventListener("wheel", onWheel);
   }, [scheduleDraw]);
 
+  // Atajos sobre el plano. El contenedor es focusable, así que solo actúan
+  // cuando el plano tiene el foco: nunca le roban una tecla al filtro de la
+  // tabla ni a un input del resto de la aplicación.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "+" || event.key === "=") zoomFromButton(BUTTON_ZOOM_STEP);
+    else if (event.key === "-" || event.key === "_") zoomFromButton(1 / BUTTON_ZOOM_STEP);
+    else if (event.key === "0") resetView();
+    else if (event.key === "f" || event.key === "F") focusSelection();
+    else return;
+    event.preventDefault();
+  };
+
   const localPoint = (event: React.PointerEvent): Vec2 => {
     const rect = event.currentTarget.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -295,17 +361,15 @@ export function PlanCanvas({
     onSelectLayer(layer === selectedLayer ? null : layer);
   };
 
-  const zoomFromButton = (factor: number) => {
-    viewportRef.current = zoomAt(
-      viewportRef.current,
-      { x: size.width / 2, y: size.height / 2 },
-      factor,
-    );
-    scheduleDraw();
-  };
+  const selectedZone = selectedLayer ? zoneFor(selectedLayer) : null;
 
   return (
-    <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-canvas">
+    <div
+      ref={containerRef}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className="relative h-full w-full overflow-hidden bg-canvas focus:outline-none"
+    >
       <canvas
         ref={canvasRef}
         className={hoveredLayer ? "cursor-pointer" : "cursor-grab"}
@@ -323,19 +387,113 @@ export function PlanCanvas({
             max={occupancy.maxLayerCount}
             selected={badge.layer === selectedLayer}
             dimmed={highlightLayers !== null && !highlightLayers.has(badge.layer)}
+            label={formatZoneLabels(badge.zoneIds, zoneLabel)}
             onSelect={() => onSelectLayer(badge.layer === selectedLayer ? null : badge.layer)}
             onHover={setHoveredLayer}
           />
         ))}
       </div>
 
-      <div className="absolute right-3 bottom-3 flex flex-col gap-1.5">
-        <ViewButton label="Acercar" onClick={() => zoomFromButton(ZOOM_STEP)}>+</ViewButton>
-        <ViewButton label="Alejar" onClick={() => zoomFromButton(1 / ZOOM_STEP)}>−</ViewButton>
-        <ViewButton label="Ajustar a la vista" onClick={resetView}>⤢</ViewButton>
-      </div>
+      <PlanControls
+        zoom={zoom}
+        onZoomIn={() => zoomFromButton(BUTTON_ZOOM_STEP)}
+        onZoomOut={() => zoomFromButton(1 / BUTTON_ZOOM_STEP)}
+        onFit={resetView}
+        onFocusSelection={focusSelection}
+        selectionLabel={
+          selectedZone ? formatZoneLabels(selectedZone.zoneIds, zoneLabel) : null
+        }
+      />
     </div>
   );
+}
+
+/**
+ * Controles de cámara del plano.
+ *
+ * Un solo bloque con borde en vez de botones sueltos: se lee como un
+ * instrumento y no como tres cosas flotando. El indicador de zoom va entre + y
+ * −, que es donde uno lo busca.
+ *
+ * El zoom se muestra relativo al encuadre completo (1× = todo el plano en
+ * pantalla), no en porcentaje: un DXF está en unidades de mundo, así que un
+ * "100%" no significaría nada.
+ */
+function PlanControls({
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onFit,
+  onFocusSelection,
+  selectionLabel,
+}: {
+  zoom: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onFit: () => void;
+  onFocusSelection: () => void;
+  selectionLabel: string | null;
+}) {
+  return (
+    <div className="absolute right-3 bottom-3 flex w-8 flex-col overflow-hidden rounded-sm border border-line bg-panel/90 backdrop-blur-[2px]">
+      <ViewButton label="Acercar (+)" onClick={onZoomIn}>
+        <svg viewBox="0 0 16 16" className="size-3.5" {...STROKE} aria-hidden>
+          <path d="M8 3.5v9M3.5 8h9" />
+        </svg>
+      </ViewButton>
+
+      <span
+        className="tnum border-y border-line py-1 text-center font-mono text-[9.5px] leading-none text-ink-dim"
+        title="Zoom respecto del plano completo"
+      >
+        {formatZoom(zoom)}
+      </span>
+
+      <ViewButton label="Alejar (−)" onClick={onZoomOut}>
+        <svg viewBox="0 0 16 16" className="size-3.5" {...STROKE} aria-hidden>
+          <path d="M3.5 8h9" />
+        </svg>
+      </ViewButton>
+
+      <ViewButton label="Ajustar al plano completo (0)" onClick={onFit} divided>
+        <svg viewBox="0 0 16 16" className="size-3.5" {...STROKE} aria-hidden>
+          <path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" />
+        </svg>
+      </ViewButton>
+
+      <ViewButton
+        label={
+          selectionLabel
+            ? `Centrar en ${selectionLabel} (F)`
+            : "Centrar en la zona seleccionada (F)"
+        }
+        onClick={onFocusSelection}
+        disabled={selectionLabel === null}
+      >
+        <svg viewBox="0 0 16 16" className="size-3.5" {...STROKE} aria-hidden>
+          <circle cx="8" cy="8" r="3.25" />
+          <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2" />
+        </svg>
+      </ViewButton>
+    </div>
+  );
+}
+
+/** Trazo común de los iconos del panel. */
+const STROKE = {
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.4,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
+
+/** "0.8×", "1×", "3.4×", "12×" — nunca ruido decimal. */
+function formatZoom(zoom: number): string {
+  if (!Number.isFinite(zoom) || zoom <= 0) return "—";
+  if (zoom >= 10) return `${Math.round(zoom)}×`;
+  const rounded = Math.round(zoom * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}×`;
 }
 
 function ZoneBadge({
@@ -343,6 +501,7 @@ function ZoneBadge({
   max,
   selected,
   dimmed,
+  label,
   onSelect,
   onHover,
 }: {
@@ -350,6 +509,7 @@ function ZoneBadge({
   max: number;
   selected: boolean;
   dimmed: boolean;
+  label: string;
   onSelect: () => void;
   onHover: (layer: string | null) => void;
 }) {
@@ -370,7 +530,7 @@ function ZoneBadge({
         opacity: dimmed ? 0.2 : 1,
       }}
       className="pointer-events-auto absolute flex -translate-x-1/2 -translate-y-1/2 items-stretch overflow-hidden rounded-sm border bg-abyss/90 backdrop-blur-[2px] transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
-      title={`Zonas ${badge.zoneIds.join(", ")} — ${badge.count} persona(s)`}
+      title={`${label} — ${badge.count} persona(s) · capa ${badge.layer}`}
     >
       {/* Franja de color a la izquierda en vez de teñir el número: el conteo
           queda siempre legible y la densidad se lee igual de rápido. */}
@@ -383,8 +543,10 @@ function ZoneBadge({
         >
           {badge.count}
         </span>
-        <span className="mt-1 block font-mono text-[9px] leading-none text-ink-dim">
-          {badge.layer}
+        {/* El nombre de la zona, no su id. Truncado: una insignia no puede
+            crecer sin taparle el plano a las de al lado. */}
+        <span className="mt-1 block max-w-[7rem] truncate text-[9px] leading-none text-ink-dim">
+          {label}
         </span>
       </span>
     </button>
@@ -395,18 +557,26 @@ function ViewButton({
   children,
   label,
   onClick,
+  disabled,
+  divided,
 }: {
   children: React.ReactNode;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
+  /** Separador arriba: agrupa el encuadre aparte del zoom. */
+  divided?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       title={label}
-      className="grid size-7 place-items-center rounded-sm border border-line bg-panel/90 text-ink-soft backdrop-blur-[2px] transition-colors hover:border-edge hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
+      className={`grid h-7 place-items-center text-ink-soft transition-colors enabled:hover:bg-hover enabled:hover:text-ink focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-signal disabled:text-ink-dim/40 ${
+        divided ? "border-t border-line" : ""
+      }`}
     >
       {children}
     </button>

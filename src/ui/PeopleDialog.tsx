@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Person } from "../core/occupancy/types";
-import { PeopleTable } from "./PeopleTable";
+import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
+import { PeopleTable, type PeopleTableComponent } from "./PeopleTable";
 
 export interface PeopleDialogProps {
   open: boolean;
@@ -11,6 +12,10 @@ export interface PeopleDialogProps {
   emptyMessage: string;
   /** Color del indicador del encabezado; sale de la rampa de densidad. */
   accent?: string;
+  /** Zona legible: descripción → nombre → id. */
+  zoneLabel?: ZoneLabeller;
+  /** Tabla a usar. Por defecto la del repo; ver `PeopleTableComponent`. */
+  table?: PeopleTableComponent;
 }
 
 /**
@@ -19,6 +24,9 @@ export interface PeopleDialogProps {
  * Usa el <dialog> nativo en vez de una librería: el navegador ya da la trampa
  * de foco, cierre con Escape, capa de fondo inerte y semántica de modal. Una
  * dependencia menos que el equipo tenga que sacar, y accesible por defecto.
+ *
+ * Como el <dialog> modal vive en la top layer, sigue apareciendo por encima del
+ * visor cuando este está en pantalla completa. Un modal hecho con divs no.
  */
 export function PeopleDialog({
   open,
@@ -28,6 +36,8 @@ export function PeopleDialog({
   people,
   emptyMessage,
   accent,
+  zoneLabel = RAW_ZONE_LABEL,
+  table: Table = PeopleTable,
 }: PeopleDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
 
@@ -100,7 +110,7 @@ export function PeopleDialog({
           </button>
         </header>
 
-        <PeopleTable people={people} emptyMessage={emptyMessage} />
+        <Table people={people} emptyMessage={emptyMessage} zoneLabel={zoneLabel} />
       </div>
     </dialog>
   );

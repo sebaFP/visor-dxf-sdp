@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DxfDocument, Vec2 } from "../core/dxf/types";
 import type { OccupancySnapshot } from "../core/occupancy/types";
 import {
@@ -33,6 +33,19 @@ const BADGE_MIN_DISTANCE = 44;
 const CAMERA_MS = 320;
 /** Padding used when framing the whole drawing. Also the 1x of the zoom read-out. */
 const FIT_PADDING = 48;
+
+/**
+ * La vista en perspectiva se carga aparte: es un modo secundario y no tiene por
+ * qué pesar en el bundle de quien solo mira el plano.
+ */
+const PerspectiveView = lazy(() => import("./PerspectiveView"));
+
+/** Secuencia de teclas que abre la vista en perspectiva. */
+const PERSPECTIVE_SEQUENCE = [
+  "arrowup", "arrowup", "arrowdown", "arrowdown",
+  "arrowleft", "arrowright", "arrowleft", "arrowright",
+  "b", "a",
+];
 
 export interface PlanCanvasProps {
   doc: DxfDocument;
@@ -76,6 +89,9 @@ export function PlanCanvas({
   const [badges, setBadges] = useState<Badge[]>([]);
   /** Current scale as a multiple of "the whole plan fits on screen". */
   const [zoom, setZoom] = useState(1);
+  const [perspective, setPerspective] = useState(false);
+  /** Cuánto de PERSPECTIVE_SEQUENCE lleva tecleado el usuario. */
+  const sequenceRef = useRef(0);
 
   const renderer = useMemo(() => new PlanRenderer(doc, DARK_THEME), [doc]);
 
@@ -313,6 +329,22 @@ export function PlanCanvas({
   // tabla ni a un input del resto de la aplicación.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // La vista en perspectiva tiene sus propios controles: sin esto, moverse en
+    // ella también movería la cámara del plano que queda debajo.
+    if (perspective) return;
+
+    const pressed = event.key.toLowerCase();
+    if (pressed === PERSPECTIVE_SEQUENCE[sequenceRef.current]) {
+      sequenceRef.current += 1;
+      if (sequenceRef.current === PERSPECTIVE_SEQUENCE.length) {
+        sequenceRef.current = 0;
+        setPerspective(true);
+      }
+    } else {
+      // Un fallo reinicia, salvo que la tecla sea el comienzo de la secuencia.
+      sequenceRef.current = pressed === PERSPECTIVE_SEQUENCE[0] ? 1 : 0;
+    }
+
     if (event.key === "+" || event.key === "=") zoomFromButton(BUTTON_ZOOM_STEP);
     else if (event.key === "-" || event.key === "_") zoomFromButton(1 / BUTTON_ZOOM_STEP);
     else if (event.key === "0") resetView();
@@ -397,6 +429,20 @@ export function PlanCanvas({
           />
         ))}
       </div>
+
+      {perspective && (
+        <Suspense fallback={null}>
+          <PerspectiveView
+            doc={doc}
+            renderer={renderer}
+            occupancy={occupancy}
+            zoneStyles={zoneStyles}
+            startLayer={selectedLayer}
+            zoneLabel={zoneLabel}
+            onExit={() => setPerspective(false)}
+          />
+        </Suspense>
+      )}
 
       <PlanControls
         zoom={zoom}

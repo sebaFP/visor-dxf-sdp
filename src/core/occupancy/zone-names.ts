@@ -1,3 +1,4 @@
+import { firstOf, textValue as text } from "./extra-fields";
 import type { Person } from "./types";
 
 /**
@@ -60,41 +61,8 @@ const NAME_KEYS = new Set([
   "zone",
 ]);
 
-/**
- * Fold a key to its comparable form: no case, no separators, no accents.
- * One system writes ZONA_DESCRIPCION, another zonaDescripcion, a third
- * "zona descripción" — all the same field, and none of them worth a bug report.
- */
-function normalizeKey(key: string): string {
-  return key
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
 /** Identity labeller: shows the raw id. The default when nothing is configured. */
 export const RAW_ZONE_LABEL: ZoneLabeller = (zoneId) => zoneId;
-
-function text(value: unknown): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
-}
-
-/** First non-empty value in `extra` whose key normalises into `keys`. */
-function firstOf(
-  extra: NonNullable<Person["extra"]>,
-  keys: ReadonlySet<string>,
-): string | null {
-  for (const key of Object.keys(extra)) {
-    if (!keys.has(normalizeKey(key))) continue;
-    const value = text(extra[key]);
-    if (value !== null) return value;
-  }
-  return null;
-}
 
 function lookup(catalog: ZoneCatalog | undefined, zoneId: string): ZoneInfo | undefined {
   if (!catalog) return undefined;

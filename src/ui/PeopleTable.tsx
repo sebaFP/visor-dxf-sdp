@@ -68,7 +68,7 @@ export function PeopleTable({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filtrar por nombre, RUT o zona"
+            placeholder="Filtrar por nombre, empresa o zona"
             className="w-full rounded-sm border border-line bg-abyss py-1.5 pr-2.5 pl-8 text-sm text-ink placeholder:text-ink-dim focus:border-signal focus:outline-none"
           />
         </div>

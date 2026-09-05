@@ -192,25 +192,58 @@ Todo esto son ~40 líneas en
 
 ## 3. Qué muestra la tabla — `src/ui/person-columns.ts`
 
-Hoy la tabla muestra el mínimo: nombre, RUT, zona y hora de detección (más
-permanencia, calculada). Para agregar un campo:
+Hoy la tabla muestra nombre, empresa, contrato, zona y hora de detección (más
+permanencia, calculada). El RUT **no** se muestra: sigue siendo `Person.id`, la
+identidad del registro, pero no aporta nada a quien mira una zona en pantalla.
+
+`empresa` y `contrato` salen de `Person.extra`; si su fuente no los trae, esas
+dos celdas muestran `—`.
+
+**No hace falta renombrar nada al mapear.** El mismo dato viaja con nombre
+distinto según de dónde salga —el maestro de personas los llama `empresa` y
+`nrocontrato`, la sábana de turnos `empresa` y `contrato`, y los endpoints de
+ubicación emiten además `EMPRESA` y `CONTRATO` en mayúsculas—, así que la tabla
+compara las claves normalizadas, igual que hace con las de zona:
+
+| Campo    | Claves aceptadas en `extra` (en cualquier grafía)                                     |
+| -------- | -------------------------------------------------------------------------------------- |
+| empresa  | `EMPRESA`, `NOMBRE_EMPRESA`, `EMPRESA_NOMBRE`, `RAZON_SOCIAL`, `company`                |
+| contrato | `CONTRATO`, `NROCONTRATO`, `N_CONTRATO`, `NUMERO_CONTRATO`, `ID_CONTRATO`, `contract`   |
+
+Mayúsculas, guiones bajos, espacios y acentos dan lo mismo: `NRO_CONTRATO`,
+`nroContrato` y `"nro contrato"` son la misma clave. Un valor en blanco cuenta
+como ausente y la celda muestra `—`.
+
+Ojo con una diferencia que no es del visor: la razón social de la sábana de
+turnos y el nombre corto del maestro de personas **no son el mismo string**
+(`INGENIERIA Y CONSTRUCCIONES MAS ERRAZURIZ LTDA.,` frente a `MAS ERRAZURIZ`).
+Elijan una fuente y quédense con ella, o la columna mezclará las dos formas.
+
+Para agregar un campo:
 
 1. Póngalo en `Person.extra` desde su `PeopleSource`.
 2. Agregue una entrada a `PERSON_COLUMNS`:
 
 ```ts
 export const PERSON_COLUMNS: PersonColumn[] = [
-  { key: "name",   header: "Nombre", value: (p) => p.name },
-  { key: "id",     header: "RUT",    value: (p) => p.id, variant: "mono", width: "8.5rem" },
-  { key: "zoneId", header: "Zona",   value: (p, ctx) => ctx.zoneLabel(p.zoneId), variant: "chip" },
+  { key: "name",     header: "Nombre",   value: (p) => p.name },
+  { key: "empresa",  header: "Empresa",  value: (p) => personField(p, COMPANY_KEYS) ?? "—" },
+  { key: "contrato", header: "Contrato", value: (p) => personField(p, CONTRACT_KEYS) ?? "—", variant: "mono", width: "7.5rem" },
+  { key: "zoneId",   header: "Zona",     value: (p, ctx) => ctx.zoneLabel(p.zoneId), variant: "chip" },
 
   // agregado:
   { key: "gerencia", header: "Gerencia", value: (p) => String(p.extra?.gerencia ?? "—") },
 ];
 ```
 
+`personField(person, claves)` es el lector tolerante de
+[`src/core/occupancy/extra-fields.ts`](src/core/occupancy/extra-fields.ts):
+devuelve el primer valor no vacío cuya clave normalizada esté en el conjunto, y
+`null` si no hay ninguno. Úsenlo cuando su campo pueda llegar con más de una
+grafía; para uno con nombre fijo basta `p.extra?.loQueSea`.
+
 `variant` decide cómo se pinta la celda: `text` (por defecto), `mono`
-(monoespaciado y a la derecha, para RUT/horas/códigos) o `chip` (pastilla, para
+(monoespaciado y a la derecha, para códigos y horas) o `chip` (pastilla, para
 categorías cortas). `width` fija el ancho; sin él la columna reparte el
 sobrante. `secondary: true` la oculta en pantallas chicas. El filtro del modal
 busca sobre todas las columnas declaradas, sin configuración extra.

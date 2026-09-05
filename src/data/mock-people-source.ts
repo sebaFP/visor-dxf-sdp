@@ -39,6 +39,27 @@ const ROLES = [
   "Jefe de Turno", "Ayudante", "Ingeniero de Proceso",
 ];
 
+/**
+ * Empresa contratista y su contrato vigente, emparejados a propósito: en la
+ * tabla las dos columnas salen de la misma persona, y una empresa con tres
+ * contratos distintos delataría de inmediato que el dato es inventado.
+ *
+ * Se imita la forma del sistema de referencia: nombre corto de la contratista
+ * (como el maestro de personas, no la razón social completa de la sábana de
+ * turnos) y contrato como código numérico de diez dígitos. Los nombres son
+ * ficticios — no son contratistas reales de ninguna faena.
+ */
+const CONTRACTORS = [
+  { empresa: "MONTAJES ANDINOS", contrato: "4600031102" },
+  { empresa: "SERVICIOS CORDILLERA", contrato: "4600030418" },
+  { empresa: "INGENIERIA ALTIPLANO", contrato: "4600029871" },
+  { empresa: "MANTENCION AUSTRAL", contrato: "4600030339" },
+  { empresa: "CONSTRUCCIONES ELQUI", contrato: "4600031540" },
+  { empresa: "PERFORACIONES LOA", contrato: "4600030765" },
+  // Personal de la propia faena: no entra por contrato de terceros.
+  { empresa: "PERSONAL PROPIO", contrato: null },
+];
+
 /** Zones that exist in the detection system but are not drawn on this plan. */
 const UNMAPPED_ZONES = ["12", "34", "58", "99", "310", "412"];
 
@@ -151,6 +172,8 @@ export function generatePeople(options: MockOptions): Person[] {
         area: pick(rand, AREAS),
         cargo: pick(rand, ROLES),
         tag: `TAG-${1000 + Math.floor(rand() * 9000)}`,
+        // Un solo spread: empresa y contrato quedan siempre coherentes.
+        ...pick(rand, CONTRACTORS),
         // Nombres del esquema de referencia (ID_ZONA / ZONA / ZONA_DESCRIPCION).
         // El visor los detecta solos y rotula la zona con ellos en vez de
         // mostrar el id crudo; ID_ZONA es `zoneId` y por eso no va acá.

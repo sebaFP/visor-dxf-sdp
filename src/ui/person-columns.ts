@@ -1,3 +1,4 @@
+import { personField } from "../core/occupancy/extra-fields";
 import type { Person } from "../core/occupancy/types";
 import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 
@@ -8,7 +9,7 @@ import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names"
  * Para mostrar más, pongan el valor en `Person.extra` desde su PeopleSource y
  * agreguen una entrada acá. No hay que tocar nada más.
  *
- *   { key: "gerencia", header: "Gerencia", value: (p) => String(p.extra?.gerencia ?? "—") }
+ *   { key: "gerencia", header: "Gerencia", value: (p) => text(p.extra?.gerencia) }
  */
 
 /**
@@ -31,7 +32,7 @@ export interface PersonColumn {
   /**
    * Cómo se pinta la celda:
    *   text  — texto normal (por defecto)
-   *   mono  — monoespaciado y alineado a la derecha; para RUT, horas, códigos
+   *   mono  — monoespaciado y alineado a la derecha; para códigos, horas
    *   chip  — pastilla; para categorías como la zona
    */
   variant?: "text" | "mono" | "chip";
@@ -61,9 +62,52 @@ export function formatElapsed(iso: string, now: number): string {
   return `${hours} h ${String(minutes % 60).padStart(2, "0")}`;
 }
 
+/**
+ * Grafías aceptadas para empresa y contrato en `Person.extra`.
+ *
+ * No es paranoia: el mismo dato viaja con nombre distinto según de dónde salga.
+ * En el sistema de referencia, el maestro de personas los llama `empresa` y
+ * `nrocontrato`, la sábana de turnos `empresa` y `contrato`, y los endpoints de
+ * ubicación emiten además `EMPRESA` y `CONTRATO` en mayúsculas. Se comparan
+ * normalizadas (sin mayúsculas, separadores ni acentos), así que `NRO_CONTRATO`
+ * y `nroContrato` son la misma clave.
+ */
+export const COMPANY_KEYS = new Set([
+  "empresa",
+  "nombreempresa",
+  "empresanombre",
+  "razonsocial",
+  "company",
+]);
+
+export const CONTRACT_KEYS = new Set([
+  "contrato",
+  "nrocontrato",
+  "ncontrato",
+  "numerocontrato",
+  "contratonumero",
+  "idcontrato",
+  "contract",
+  "contractnumber",
+]);
+
+/** Marca de campo ausente. Una celda vacía se lee como un fallo de la tabla. */
+const MISSING = "—";
+
 export const PERSON_COLUMNS: PersonColumn[] = [
   { key: "name", header: "Nombre", value: (p) => p.name },
-  { key: "id", header: "RUT", value: (p) => p.id, variant: "mono", width: "8.5rem" },
+  {
+    key: "empresa",
+    header: "Empresa",
+    value: (p) => personField(p, COMPANY_KEYS) ?? MISSING,
+  },
+  {
+    key: "contrato",
+    header: "Contrato",
+    value: (p) => personField(p, CONTRACT_KEYS) ?? MISSING,
+    variant: "mono",
+    width: "7.5rem",
+  },
   // Sin ancho fijo: el rótulo de una zona con nombre no cabe en 5rem.
   { key: "zoneId", header: "Zona", value: (p, ctx) => ctx.zoneLabel(p.zoneId), variant: "chip" },
   {

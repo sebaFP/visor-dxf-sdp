@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { Person } from "../core/occupancy/types";
 import { personField } from "../core/occupancy/extra-fields";
-import { COMPANY_KEYS } from "./person-columns";
+import { COMPANY_KEYS, CONTRACT_KEYS } from "./person-columns";
 
 /**
  * Marcador compartido por los recorridos del plano.
@@ -45,6 +45,7 @@ export interface KillEntry {
   id: number;
   name: string;
   company: string;
+  contract: string | null;
 }
 
 export function companyOf(person: Person): string {
@@ -65,7 +66,12 @@ export function useKillFeed(): [KillEntry[], (person: Person) => void] {
     const id = ++idRef.current;
     setFeed((current) => [
       ...current.slice(-(KILL_FEED_MAX - 1)),
-      { id, name: person.name, company: companyOf(person) },
+      {
+        id,
+        name: person.name,
+        company: companyOf(person),
+        contract: personField(person, CONTRACT_KEYS) ?? null,
+      },
     ]);
     window.setTimeout(() => {
       setFeed((current) => current.filter((entry) => entry.id !== id));
@@ -90,11 +96,36 @@ export function KillFeed({ feed }: { feed: KillEntry[] }) {
             }`}
           >
             <span className="text-ink">{entry.name}</span>
-            <span className="text-ink-dim ml-auto text-[9px] tracking-wider">{entry.company}</span>
+            <span className="text-ink-dim ml-auto text-[9px] tracking-wider">
+              {entry.company}
+              {entry.contract && ` · ${entry.contract}`}
+            </span>
           </li>
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * Carril de rondas: una marca por recinto del plano.
+ *
+ * Azul lo despejado, ámbar dónde estás, apagado lo que falta. Vive sobre la
+ * barra y no dentro de una celda porque es lo único que hay que poder leer sin
+ * buscarlo: dice de un vistazo por dónde va la partida.
+ */
+export function RoundRail({ total, current }: { total: number; current: number }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-[74px] flex h-1 items-end gap-0.5">
+      {Array.from({ length: total }, (_, i) => (
+        <div
+          key={i}
+          className={`flex-1 ${
+            i < current ? "bg-signal h-0.5" : i === current ? "bg-alert h-1" : "bg-edge h-0.5"
+          }`}
+        />
+      ))}
+    </div>
   );
 }
 

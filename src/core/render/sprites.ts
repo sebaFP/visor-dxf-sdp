@@ -66,46 +66,106 @@ export const RIG_ART: PixelArt = [
 /**
  * El mismo minero visto desde arriba, mirando al este (rotación 0).
  *
- * Desde arriba lo único que se reconoce es el casco: es lo más alto y lo más
- * claro. Por eso ocupa el centro y la lámpara marca el frente — sin ella, un
- * minero de espaldas y uno de frente son la misma mancha y no se sabe si te ha
- * visto.
+ * Hombros, casco y lámpara: nada más. Desde arriba una figura mide unos treinta
+ * y ocho píxeles en pantalla, y a ese tamaño un brazo de tres celdas no se lee
+ * como un brazo — se lee como una mancha, y la silueta se convierte en un
+ * bloque. Lo que sí se lee es el óvalo ancho de los hombros, el disco claro del
+ * casco encima y hacia dónde apunta la lámpara.
+ *
+ * El contorno (`O`) rodea la silueta ENTERA, calculado dilatándola: es lo único
+ * que la separa del trazado del DXF, que pasa por debajo.
  */
 export const MINER_TOP_ART: PixelArt = [
-  "..............",
-  "...oooooo.....",
-  "..oorooooog...",
-  ".oorroooHHH...",
-  ".oorrooHhhhH..",
-  ".oorrohhhhhhL.",
-  ".oorrohhhhhhL.",
-  ".oorrooHhhhH..",
-  ".oorroooHHH...",
-  "..oorooooog...",
-  "...oooooo.....",
-  "..............",
+  "....................",
+  ".....OOOOOO.........",
+  "....OOooooOO........",
+  "...OOroooooOOO......",
+  "..OOsroooHHHHOO.....",
+  "..OssrooHiihhHOO....",
+  "..OorroHhhhhhhHO....",
+  "..OorroHhhhhhLLO....",
+  "..OorroHhhhhhLLO....",
+  "..OorroHhhhhhhHO....",
+  "..OorrooHhhhhHOO....",
+  "..OOrroooHHHHOO.....",
+  "...OOroooooOOO......",
+  "....OOooooOO........",
+  ".....OOOOOO.........",
+  "....................",
+];
+
+/**
+ * Segundo fotograma del paso: los hombros ladeados una celda.
+ *
+ * Mover la figura entera da tiritona; ladear los hombros dejando el casco
+ * quieto da el andar torcido que se busca.
+ */
+export const MINER_STEP_ART: PixelArt = [
+  "....................",
+  "......OOOO..........",
+  "....OOOooOO.........",
+  "...OOrooooOOOO......",
+  "...OsroooHHHHOO.....",
+  "..OOsrooHiihhHOO....",
+  "..OorroHhhhhhhHO....",
+  "..OorroHhhhhhLLO....",
+  "..OorroHhhhhhLLO....",
+  "..OorroHhhhhhhHO....",
+  "..OorrooHhhhhHOO....",
+  "..OOrroooHHHHOO.....",
+  "...OrroooooOOO......",
+  "...OOroooooO........",
+  "....OOoooOOO........",
+  ".....OOOOO..........",
+];
+
+/**
+ * Lo que queda en el suelo.
+ *
+ * Desde arriba, alguien tumbado y alguien en pie ocupan lo mismo, así que caer
+ * no puede ser encogerse: la figura pierde la silueta y se desparrama.
+ */
+export const MINER_FALLEN_ART: PixelArt = [
+  "....................",
+  "....................",
+  "....................",
+  "....................",
+  ".....OOOOOOOO.......",
+  "...OOOrrooooOOO.....",
+  "..OOoorrooooHHOO....",
+  "..OooorroooHhhHO....",
+  "..OooorroooHhhHO....",
+  "..OOoorrooooHHOO....",
+  "...OOOrrooooOOO.....",
+  ".....OOOOOOOO.......",
+  "....................",
+  "....................",
+  "....................",
+  "....................",
 ];
 
 /**
  * El operador, también desde arriba y mirando al este.
  *
- * Casco claro y banda en el azul del visor: a diez metros y con doce figuras en
- * pantalla, lo primero que hay que poder contestar es cuál de todas eres tú.
- * La boca del equipo va en ámbar porque es la única parte que dice hacia dónde
- * saldrá el disparo.
+ * Silueta más estrecha, tonos fríos y el equipo por delante. Con doce figuras
+ * en pantalla, lo primero que hay que poder contestar es cuál eres tú.
  */
 export const OPERATOR_TOP_ART: PixelArt = [
   "....................",
-  "...oooooo...........",
-  "..oorooooog.........",
-  ".oorroooHHH.........",
-  ".oorrooHhhhH........",
-  ".oorrohhhhhhwwwwwwW.",
-  ".oorrohhhhhhwwwwwwW.",
-  ".oorrooHhhhH........",
-  ".oorroooHHH.........",
-  "..oorooooog.........",
-  "...oooooo...........",
+  "....................",
+  "....OOOOOO..........",
+  "...OOroooOOO........",
+  "...OrroooHHOOO......",
+  "..OOrroHHihHHO......",
+  "..OorroHhhhhHOOOOOOO",
+  "..OorrHhhhhwwwwwwwWW",
+  "..OorrHhhhhwwwwwwwWW",
+  "..OorroHhhhhHOOOOOOO",
+  "..OOrroHHhhHHO......",
+  "...OrroooHHOOO......",
+  "...OOroooOOO........",
+  "....OOOOOO..........",
+  "....................",
   "....................",
 ];
 
@@ -123,14 +183,31 @@ export const MINER_PALETTE: Palette = {
   B: "#2a3543",
 };
 
+/**
+ * Paleta de la vista cenital.
+ *
+ * `O` es casi negro a propósito: sin un contorno oscuro, el marrón del overol
+ * se funde con el trazado del plano y la figura desaparece a treinta píxeles.
+ */
+export const MINER_TOP_PALETTE: Palette = {
+  O: "#140c05",
+  o: "#8f5324",
+  r: "#cfdbe6",
+  h: "#d8ae2a",
+  H: "#7a5c0f",
+  i: "#ffeaa0",
+  L: "#fff4cf",
+  s: "#3f4d22",
+};
+
 export const OPERATOR_PALETTE: Palette = {
-  h: "#cdd8e3",
-  H: "#93a3b3",
-  o: "#3f5468",
-  O: "#2a3947",
+  O: "#080c11",
+  o: "#41576d",
   r: "#45c0f5",
-  g: "#dde5ed",
-  w: "#5b6a7b",
+  h: "#dbe4ed",
+  H: "#77899b",
+  i: "#ffffff",
+  w: "#66788c",
   W: "#f0a63c",
 };
 

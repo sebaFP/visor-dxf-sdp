@@ -63,6 +63,52 @@ export const RIG_ART: PixelArt = [
   ".dmgggggggggggggmd..",
 ];
 
+/**
+ * El mismo minero visto desde arriba, mirando al este (rotación 0).
+ *
+ * Desde arriba lo único que se reconoce es el casco: es lo más alto y lo más
+ * claro. Por eso ocupa el centro y la lámpara marca el frente — sin ella, un
+ * minero de espaldas y uno de frente son la misma mancha y no se sabe si te ha
+ * visto.
+ */
+export const MINER_TOP_ART: PixelArt = [
+  "..............",
+  "...oooooo.....",
+  "..oorooooog...",
+  ".oorroooHHH...",
+  ".oorrooHhhhH..",
+  ".oorrohhhhhhL.",
+  ".oorrohhhhhhL.",
+  ".oorrooHhhhH..",
+  ".oorroooHHH...",
+  "..oorooooog...",
+  "...oooooo.....",
+  "..............",
+];
+
+/**
+ * El operador, también desde arriba y mirando al este.
+ *
+ * Casco claro y banda en el azul del visor: a diez metros y con doce figuras en
+ * pantalla, lo primero que hay que poder contestar es cuál de todas eres tú.
+ * La boca del equipo va en ámbar porque es la única parte que dice hacia dónde
+ * saldrá el disparo.
+ */
+export const OPERATOR_TOP_ART: PixelArt = [
+  "....................",
+  "...oooooo...........",
+  "..oorooooog.........",
+  ".oorroooHHH.........",
+  ".oorrooHhhhH........",
+  ".oorrohhhhhhwwwwwwW.",
+  ".oorrohhhhhhwwwwwwW.",
+  ".oorrooHhhhH........",
+  ".oorroooHHH.........",
+  "..oorooooog.........",
+  "...oooooo...........",
+  "....................",
+];
+
 export const MINER_PALETTE: Palette = {
   h: "#c9a227",
   H: "#8f7318",
@@ -75,6 +121,17 @@ export const MINER_PALETTE: Palette = {
   g: "#4a3728",
   b: "#3c4a5c",
   B: "#2a3543",
+};
+
+export const OPERATOR_PALETTE: Palette = {
+  h: "#cdd8e3",
+  H: "#93a3b3",
+  o: "#3f5468",
+  O: "#2a3947",
+  r: "#45c0f5",
+  g: "#dde5ed",
+  w: "#5b6a7b",
+  W: "#f0a63c",
 };
 
 export const RIG_PALETTE: Palette = {

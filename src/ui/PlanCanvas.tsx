@@ -35,17 +35,29 @@ const CAMERA_MS = 320;
 const FIT_PADDING = 48;
 
 /**
- * La vista en perspectiva se carga aparte: es un modo secundario y no tiene por
- * qué pesar en el bundle de quien solo mira el plano.
+ * Los recorridos se cargan aparte: son modos secundarios y no tienen por qué
+ * pesar en el bundle de quien solo mira el plano.
  */
 const PerspectiveView = lazy(() => import("./PerspectiveView"));
+const OverheadView = lazy(() => import("./OverheadView"));
 
-/** Secuencia de teclas que abre la vista en perspectiva. */
-const PERSPECTIVE_SEQUENCE = [
+type PlanMode = "perspective" | "overhead";
+
+const SEQUENCE_PREFIX = [
   "arrowup", "arrowup", "arrowdown", "arrowdown",
   "arrowleft", "arrowright", "arrowleft", "arrowright",
-  "b", "a",
 ];
+
+/**
+ * Secuencias que abren cada recorrido. Comparten las ocho primeras teclas y solo
+ * se diferencian en el orden de las dos últimas.
+ */
+const MODE_SEQUENCES: [PlanMode, string[]][] = [
+  ["perspective", [...SEQUENCE_PREFIX, "b", "a"]],
+  ["overhead", [...SEQUENCE_PREFIX, "a", "b"]],
+];
+
+const SEQUENCE_LENGTH = SEQUENCE_PREFIX.length + 2;
 
 export interface PlanCanvasProps {
   doc: DxfDocument;
@@ -89,9 +101,15 @@ export function PlanCanvas({
   const [badges, setBadges] = useState<Badge[]>([]);
   /** Current scale as a multiple of "the whole plan fits on screen". */
   const [zoom, setZoom] = useState(1);
-  const [perspective, setPerspective] = useState(false);
-  /** Cuánto de PERSPECTIVE_SEQUENCE lleva tecleado el usuario. */
-  const sequenceRef = useRef(0);
+  const [mode, setMode] = useState<PlanMode | null>(null);
+  /**
+   * Las últimas teclas pulsadas.
+   *
+   * Un índice de progreso bastaba con una sola secuencia, pero con dos que
+   * comparten prefijo hay que llegar a la novena tecla sin haber apostado por
+   * ninguna. Guardar la cola y compararla es indiferente a cuántas haya.
+   */
+  const keyLogRef = useRef<string[]>([]);
 
   const renderer = useMemo(() => new PlanRenderer(doc, DARK_THEME), [doc]);
 
@@ -329,20 +347,20 @@ export function PlanCanvas({
   // tabla ni a un input del resto de la aplicación.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    // La vista en perspectiva tiene sus propios controles: sin esto, moverse en
-    // ella también movería la cámara del plano que queda debajo.
-    if (perspective) return;
+    // Los recorridos tienen sus propios controles: sin esto, moverse en ellos
+    // también movería la cámara del plano que queda debajo.
+    if (mode) return;
 
-    const pressed = event.key.toLowerCase();
-    if (pressed === PERSPECTIVE_SEQUENCE[sequenceRef.current]) {
-      sequenceRef.current += 1;
-      if (sequenceRef.current === PERSPECTIVE_SEQUENCE.length) {
-        sequenceRef.current = 0;
-        setPerspective(true);
+    const log = keyLogRef.current;
+    log.push(event.key.toLowerCase());
+    if (log.length > SEQUENCE_LENGTH) log.shift();
+
+    if (log.length === SEQUENCE_LENGTH) {
+      const matched = MODE_SEQUENCES.find(([, seq]) => seq.every((key, i) => key === log[i]));
+      if (matched) {
+        log.length = 0;
+        setMode(matched[0]);
       }
-    } else {
-      // Un fallo reinicia, salvo que la tecla sea el comienzo de la secuencia.
-      sequenceRef.current = pressed === PERSPECTIVE_SEQUENCE[0] ? 1 : 0;
     }
 
     if (event.key === "+" || event.key === "=") zoomFromButton(BUTTON_ZOOM_STEP);
@@ -430,17 +448,27 @@ export function PlanCanvas({
         ))}
       </div>
 
-      {perspective && (
+      {mode && (
         <Suspense fallback={null}>
-          <PerspectiveView
-            doc={doc}
-            renderer={renderer}
-            occupancy={occupancy}
-            zoneStyles={zoneStyles}
-            startLayer={selectedLayer}
-            zoneLabel={zoneLabel}
-            onExit={() => setPerspective(false)}
-          />
+          {mode === "perspective" ? (
+            <PerspectiveView
+              doc={doc}
+              renderer={renderer}
+              occupancy={occupancy}
+              zoneStyles={zoneStyles}
+              startLayer={selectedLayer}
+              zoneLabel={zoneLabel}
+              onExit={() => setMode(null)}
+            />
+          ) : (
+            <OverheadView
+              doc={doc}
+              occupancy={occupancy}
+              startLayer={selectedLayer}
+              zoneLabel={zoneLabel}
+              onExit={() => setMode(null)}
+            />
+          )}
         </Suspense>
       )}
 

@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { pointInPolygon } from "../core/dxf/geometry";
 import type { DxfDocument, Vec2 } from "../core/dxf/types";
 import { personField } from "../core/occupancy/extra-fields";
 import type { OccupancySnapshot, Person } from "../core/occupancy/types";
 import { formatZoneLabels, RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 import {
-  blocked,
   buildLevel,
   castRay,
-  findOpenSpot,
   findVantagePoint,
   hasLineOfSight,
   move,
   type Hit,
   type Level,
 } from "../core/render/perspective";
+import { makeRandom, placePeople } from "../core/render/placement";
 import { PlanRenderer, type ZoneStyle } from "../core/render/plan-renderer";
 import {
   bakeSprite,
@@ -27,7 +25,17 @@ import {
   type BakedSprite,
 } from "../core/render/sprites";
 import { DARK_THEME, rampColor, type PlanTheme } from "../core/render/theme";
-import { COMPANY_KEYS, CONTRACT_KEYS } from "./person-columns";
+import {
+  Cell,
+  companyOf,
+  CRITICAL_HEALTH,
+  KillFeed,
+  Meter,
+  OperatorState,
+  UI,
+  useKillFeed,
+} from "./mode-hud";
+import { CONTRACT_KEYS } from "./person-columns";
 
 /**
  * Recorrido en perspectiva del plano.
@@ -134,8 +142,6 @@ const DEATH_TIME = 0.5;
 const HURT_TIME = 0.16;
 
 const MAX_HEALTH = 100;
-/** Bajo este porcentaje el marcador y la viñeta pasan a rojo. */
-const CRITICAL_HEALTH = 35;
 const MAX_AMMO = 80;
 /** Munición que devuelve cada baja. Sin esto el recorrido se queda seco. */
 const AMMO_PER_KILL = 6;
@@ -203,34 +209,8 @@ const NO_ZONE_STYLES = new Map<string, ZoneStyle>();
 /** El minimapa no necesita sesenta refrescos por segundo. */
 const MINIMAP_INTERVAL_FRAMES = 3;
 
-/** Cuánto se queda en pantalla cada línea del registro de bajas, en ms. */
-const KILL_FEED_MS = 6000;
-const KILL_FEED_MAX = 4;
-
 /** Tras caer, cuánto se muestra el marcador antes de volver al plano. */
 const DEFEAT_MS = 2200;
-
-/**
- * Tokens del visor.
- *
- * El recorrido usa exactamente la misma paleta que el resto de la aplicación
- * (`src/index.css`): es una herramienta de faena con un guiño, no una recreativa.
- * El ámbar tiene un solo significado — algo que atender — y por eso no decora
- * cifras que están bien.
- */
-const UI = {
-  abyss: "#06090d",
-  panel: "#0e141c",
-  raised: "#141d27",
-  line: "#1b2530",
-  edge: "#2a3947",
-  ink: "#dde5ed",
-  inkSoft: "#93a3b3",
-  inkDim: "#5c6d7e",
-  signal: "#45c0f5",
-  alert: "#f0a63c",
-  critical: "#e05656",
-} as const;
 
 export interface PerspectiveViewProps {
   doc: DxfDocument;
@@ -310,12 +290,6 @@ interface Stats {
   defeated: boolean;
 }
 
-interface KillEntry {
-  id: number;
-  name: string;
-  company: string;
-}
-
 interface Hud {
   zone: string;
   zoneMeta: string;
@@ -359,121 +333,35 @@ function shade(rgb: [number, number, number], light: number): string {
   return `rgb(${(rgb[0] * light) | 0},${(rgb[1] * light) | 0},${(rgb[2] * light) | 0})`;
 }
 
-/** Hash estable de una cadena. Misma persona, misma posición, siempre. */
-function hash(text: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
-
-function makeRandom(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/**
- * Radio del grupo alrededor del centro de un anillo.
- *
- * Repartir uniformemente por el polígono sería igual de inventado y peor: una
- * capa como "75-142-128-207" cubre cuatro zonas repartidas por medio plano, y
- * la gente queda a cientos de unidades unos de otros — recorriéndola no se
- * cruza a nadie. Alrededor del centro de su anillo se leen como lo que son:
- * gente trabajando en un sitio, repartida por él y no amontonada en un corro.
- */
-const CLUSTER_RADIUS = 34;
-/**
- * Fracción del radio que usa el primer intento de colocación.
- *
- * Casi todos aciertan a la primera, así que este número es el que manda de
- * verdad: con 0,2 la zona entera cabía en cuatro metros y el grupo salía
- * apelotonado delante de las narices.
- */
-const CLUSTER_SPREAD = 0.62;
-
 /**
  * Siembra una entidad por persona detectada, dentro del polígono de su zona.
  *
- * El sistema de detección da zona, no coordenadas, así que la posición se
- * inventa — pero derivada del id, para que no salte de sitio entre frames.
+ * La colocación vive en `core/render/placement.ts`, que es donde tiene sentido:
+ * traducir "hay doce en la zona 85" a doce puntos del plano no depende de si se
+ * mira de frente o desde arriba. Acá solo se le pone encima el estado que
+ * necesita un enemigo del recorrido.
  */
 function spawnEnemies(doc: DxfDocument, occupancy: OccupancySnapshot, level: Level): Enemy[] {
-  const enemies: Enemy[] = [];
+  const placements = placePeople(doc, occupancy, {
+    level,
+    radius: ZOMBIE_RADIUS,
+    unstickRadius: UNSTICK_RADIUS,
+  });
 
-  for (const zl of doc.zoneLayers) {
-    const bucket = occupancy.byLayer.get(zl.layer);
-    if (!bucket || bucket.count === 0) continue;
-
-    const rings = zl.rings.filter((r) => Math.abs(r.area) > 0);
-    if (rings.length === 0) continue;
-
-    // Los anillos grandes se llevan más gente que los pequeños.
-    const weights = rings.map((r) => Math.abs(r.area));
-    const totalWeight = weights.reduce((a, b) => a + b, 0);
-
-    for (const person of bucket.people) {
-      const rand = makeRandom(hash(person.id));
-
-      let target = rand() * totalWeight;
-      let index = 0;
-      while (index < weights.length - 1 && target > weights[index]) {
-        target -= weights[index];
-        index++;
-      }
-      const ring = rings[index];
-
-      const { minX, maxX, minY, maxY } = ring.bounds;
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
-      const spread = Math.min(CLUSTER_RADIUS, Math.max(maxX - minX, maxY - minY) / 3);
-
-      let placed: Vec2 | null = null;
-      for (let attempt = 0; attempt < 24 && !placed; attempt++) {
-        // El radio crece con los intentos: si el centro del anillo cae fuera del
-        // polígono (los cóncavos lo hacen), se busca más lejos en vez de rendirse.
-        // La raíz reparte por área y no por radio, que amontona hacia el centro.
-        const radius =
-          spread * (CLUSTER_SPREAD + (attempt / 24) * 0.9) * Math.sqrt(rand());
-        const angle = rand() * Math.PI * 2;
-        const candidate = {
-          x: cx + Math.cos(angle) * radius,
-          y: cy + Math.sin(angle) * radius,
-        };
-        if (pointInPolygon(candidate, ring.points)) placed = candidate;
-      }
-
-      // Estar dentro del polígono de la zona no basta: el plano tiene tabiques
-      // por dentro y quien nazca empotrado en uno no puede dar un paso, así que
-      // se queda de adorno mirando a la pared.
-      let at = placed ?? { x: cx, y: cy };
-      if (blocked(level, at.x, at.y, ZOMBIE_RADIUS)) {
-        at = findOpenSpot(level, at, ZOMBIE_RADIUS, UNSTICK_RADIUS);
-      }
-
-      enemies.push({
-        person,
-        layer: zl.layer,
-        x: at.x,
-        y: at.y,
-        health: ENEMY_HEALTH,
-        hurt: 0,
-        dying: 0,
-        dead: false,
-        bob: rand() * Math.PI * 2,
-        sees: false,
-      });
-    }
-  }
-
-  return enemies;
-}
-
-function companyOf(person: Person): string {
-  return personField(person, COMPANY_KEYS) ?? "SIN EMPRESA";
+  return placements.map(({ person, layer, at, seed }) => ({
+    person,
+    layer,
+    x: at.x,
+    y: at.y,
+    health: ENEMY_HEALTH,
+    hurt: 0,
+    dying: 0,
+    dead: false,
+    // Semilla derivada: el bamboleo no puede consumir del mismo flujo que la
+    // colocación o moverlo cambiaría dónde nace la gente.
+    bob: makeRandom(seed ^ 0x9e3779b9)() * Math.PI * 2,
+    sees: false,
+  }));
 }
 
 export default function PerspectiveView({
@@ -498,7 +386,6 @@ export default function PerspectiveView({
     kills: 0,
     score: 0,
   });
-  const [feed, setFeed] = useState<KillEntry[]>([]);
   const [defeated, setDefeated] = useState(false);
 
   // Extraer e indexar decenas de miles de segmentos es el paso caro. Ocurre al
@@ -604,18 +491,7 @@ export default function PerspectiveView({
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
 
-  /** Registro de bajas. Cada línea se retira sola. */
-  const feedIdRef = useRef(0);
-  const pushKill = useCallback((person: Person) => {
-    const id = ++feedIdRef.current;
-    setFeed((current) => [
-      ...current.slice(-(KILL_FEED_MAX - 1)),
-      { id, name: person.name, company: companyOf(person) },
-    ]);
-    window.setTimeout(() => {
-      setFeed((current) => current.filter((entry) => entry.id !== id));
-    }, KILL_FEED_MS);
-  }, []);
+  const [feed, pushKill] = useKillFeed();
 
   const surrender = useCallback(() => {
     setDefeated(true);
@@ -1624,28 +1500,7 @@ export default function PerspectiveView({
       />
       <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
 
-      {/* Registro de bajas. Solo cambia al derribar a alguien, así que vive en
-          estado de React sin coste por frame. La más reciente abajo y a plena
-          luz; las anteriores se apagan en vez de desaparecer de golpe. */}
-      <ul className="pointer-events-none absolute top-3 left-3 flex flex-col gap-px font-mono text-[11px]">
-        {feed.map((entry, index) => {
-          const age = feed.length - 1 - index;
-          return (
-            <li
-              key={entry.id}
-              style={{ opacity: 1 - age * 0.24 }}
-              className={`bg-panel/90 flex items-baseline gap-4 border-l-2 py-1 pr-2.5 pl-2 ${
-                age === 0 ? "border-alert" : "border-edge"
-              }`}
-            >
-              <span className="text-ink">{entry.name}</span>
-              <span className="text-ink-dim ml-auto text-[9px] tracking-wider">
-                {entry.company}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+      <KillFeed feed={feed} />
 
       <div className="border-edge bg-panel pointer-events-none absolute top-3 right-3 border p-[3px]">
         <canvas ref={minimapRef} className="block" />
@@ -1699,114 +1554,6 @@ export default function PerspectiveView({
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * Una casilla del marcador.
- *
- * Sigue siendo HTML sobre el lienzo, igual que las insignias de conteo del
- * plano: texto nítido a cualquier resolución y estilable con CSS normal.
- */
-function Cell({
-  label,
-  value,
-  suffix,
-  tone,
-  alert,
-  critical,
-  last,
-  children,
-}: {
-  label: string;
-  value: string;
-  suffix?: string;
-  tone?: "ink" | "alert";
-  /** Pinta la cifra de ámbar: hay algo que atender. */
-  alert?: boolean;
-  /** Pinta la cifra de rojo: ya es tarde para atenderlo. */
-  critical?: boolean;
-  last?: boolean;
-  children?: React.ReactNode;
-}) {
-  const color = critical
-    ? "text-[#e05656]"
-    : alert || tone === "alert"
-      ? "text-alert"
-      : "text-ink";
-
-  return (
-    <div
-      className={`flex w-[96px] shrink-0 flex-col justify-center gap-1.5 px-4 py-2 ${
-        last ? "" : "border-line border-r"
-      }`}
-    >
-      <p className="text-ink-dim text-[8.5px] tracking-[0.2em] uppercase">{label}</p>
-      <p className={`tnum text-[19px] leading-none font-semibold ${color}`}>
-        {value}
-        {suffix && <span className="text-ink-dim text-[11px]">{suffix}</span>}
-      </p>
-      {children ?? <div className="bg-line h-0.5" />}
-    </div>
-  );
-}
-
-/** Barra de dos píxeles bajo la cifra: la proporción se lee sin leer el número. */
-function Meter({ value, tone }: { value: number; tone: "ink" | "signal" | "alert" | "critical" }) {
-  const fill =
-    tone === "signal"
-      ? "bg-signal"
-      : tone === "alert"
-        ? "bg-alert"
-        : tone === "critical"
-          ? "bg-[#e05656]"
-          : "bg-ink";
-  return (
-    <div className="bg-line h-0.5">
-      <div
-        className={`h-full ${fill}`}
-        style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
-      />
-    </div>
-  );
-}
-
-/**
- * El indicador del operador: donde el clásico ponía una cara, un casco de faena.
- *
- * Cumple la misma función —decir cómo estás sin leer un número— sin la mueca
- * ensangrentada, que en una herramienta de faena estaría fuera de sitio.
- */
-function OperatorState({ health }: { health: number }) {
-  const hurt = health < 66;
-  const critical = health < CRITICAL_HEALTH;
-
-  const shell = critical ? "#8f7318" : "#c9a227";
-  const shellDark = critical ? "#5f4c10" : "#8f7318";
-  const lamp = critical ? "#8a7444" : hurt ? "#d8c288" : "#ffe9a8";
-  const eyes = critical ? UI.critical : UI.inkSoft;
-  const face = critical ? "#3a2226" : UI.edge;
-
-  return (
-    <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden>
-      <rect
-        x="0.5"
-        y="0.5"
-        width="33"
-        height="33"
-        fill={critical ? "#1d1416" : UI.raised}
-        stroke={critical ? "#4a2a2c" : UI.edge}
-      />
-      <path d="M6 20 h22 v2 h-22 z" fill={shell} />
-      <path d="M10 20 a7 7 0 0 1 14 0 z" fill={shell} />
-      <path d="M13 20 a4 4 0 0 1 8 0 z" fill={shellDark} />
-      <circle cx="17" cy="15" r="2.4" fill={lamp} />
-      {!critical && <circle cx="17" cy="15" r="4.6" fill={lamp} opacity="0.16" />}
-      <rect x="12" y="23" width="10" height="5" fill={face} />
-      <rect x="13.5" y="24.5" width="2.5" height="2" fill={eyes} />
-      <rect x="18" y="24.5" width="2.5" height="2" fill={eyes} />
-      {critical && <path d="M20 11 l2 4 l-1.5 1" stroke={UI.critical} strokeWidth="1" fill="none" />}
-    </svg>
   );
 }
 

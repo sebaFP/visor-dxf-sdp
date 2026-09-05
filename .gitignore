@@ -2,3 +2,9 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Caché incremental de TypeScript: se regenera en cada compilación.
+tsconfig.tsbuildinfo
+
+# Herramientas locales, no del proyecto.
+.atl

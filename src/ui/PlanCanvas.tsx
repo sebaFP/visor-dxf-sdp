@@ -327,6 +327,10 @@ export function PlanCanvas({
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    // El canvas no es focusable y la captura de puntero se come el enfoque por
+    // defecto, así que el contenedor nunca lo recibía: los atajos del plano
+    // (+, −, 0, F) solo funcionaban si se llegaba a él con el tabulador.
+    containerRef.current?.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
     const p = localPoint(event);
     dragRef.current = { x: p.x, y: p.y, moved: 0 };

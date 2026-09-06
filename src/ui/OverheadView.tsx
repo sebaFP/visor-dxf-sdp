@@ -143,6 +143,26 @@ const BLOOD = "124, 240, 58";
 /** Margen desde el borde al que se dibujan las flechas de quien queda fuera. */
 const OFFSCREEN_MARGIN = 26;
 
+/**
+ * Minimapa: el recinto entero de un vistazo.
+ *
+ * No repite la vista más pequeña —eso no añadiría nada, porque la vista ya es
+ * un mapa—: se aleja hasta encuadrar el anillo de la ronda completo. Contesta
+ * las dos preguntas que la cámara no puede: qué forma tiene el sitio donde
+ * estás y por dónde queda lo que falta.
+ */
+const MINIMAP_PX = 168;
+const MINIMAP_PAD = 12;
+/**
+ * Tope de mundo encuadrado.
+ *
+ * Un anillo puede medir dos kilómetros; encuadrado entero, todo cabría en un
+ * punto. Pasado el tope, el minimapa deja de encuadrar el recinto y pasa a
+ * seguir al operador.
+ */
+const MINIMAP_MAX_SPAN = 240;
+const MINIMAP_INTERVAL_FRAMES = 3;
+
 const LABEL_RANGE = 24;
 const MAX_LABELS = 6;
 const LABEL_NAME_FONT = '600 11px "IBM Plex Mono", ui-monospace, Menlo, monospace';
@@ -400,6 +420,7 @@ export default function OverheadView({
 }: OverheadViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const minimapRef = useRef<HTMLCanvasElement>(null);
 
   const [hud, setHud] = useState<Hud>({
     zone: "",
@@ -543,10 +564,12 @@ export default function OverheadView({
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container) return;
+    const minimap = minimapRef.current;
+    if (!canvas || !container || !minimap) return;
 
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const mctx = minimap.getContext("2d");
+    if (!ctx || !mctx) return;
 
     const dpr = window.devicePixelRatio || 1;
     let cssWidth = 1;
@@ -563,6 +586,10 @@ export default function OverheadView({
       canvas.height = Math.round(cssHeight * dpr);
       canvas.style.width = `${cssWidth}px`;
       canvas.style.height = `${cssHeight}px`;
+      minimap.width = Math.round(MINIMAP_PX * dpr);
+      minimap.height = Math.round(MINIMAP_PX * dpr);
+      minimap.style.width = `${MINIMAP_PX}px`;
+      minimap.style.height = `${MINIMAP_PX}px`;
       aimRef.current = { x: cssWidth / 2, y: cssHeight / 2 };
     };
 
@@ -1155,6 +1182,89 @@ export default function OverheadView({
       }
     };
 
+    /**
+     * El minimapa, encuadrando el recinto entero.
+     *
+     * Se dibuja con el MISMO renderer que la escena, solo que con otra ventana:
+     * no hay baldosa que hornear ni un segundo `PlanRenderer` que mantener en
+     * sincronía, y el pase cuesta lo mismo que el de la escena.
+     */
+    const drawMinimap = (): void => {
+      const player = playerRef.current;
+      const arena = arenas[roundRef.current.index];
+      const { minX, maxX, minY, maxY } = arena.ring.bounds;
+      const span = Math.max(maxX - minX, maxY - minY, 1e-6);
+      const inner = MINIMAP_PX - MINIMAP_PAD * 2;
+
+      const framed = span <= MINIMAP_MAX_SPAN;
+      const scale = inner / (framed ? span : MINIMAP_MAX_SPAN);
+      const cx = framed ? (minX + maxX) / 2 : player.x;
+      const cy = framed ? (minY + maxY) / 2 : player.y;
+      const view: Viewport = {
+        scale,
+        tx: MINIMAP_PX / 2 - cx * scale,
+        ty: MINIMAP_PX / 2 + cy * scale,
+      };
+
+      renderer.render(mctx, {
+        viewport: view,
+        width: MINIMAP_PX,
+        height: MINIMAP_PX,
+        zoneStyles: NO_ZONE_STYLES,
+        showBaseText: false,
+      });
+
+      // A esta escala el plano entero cabe en el recuadro y el trazado se vuelve
+      // ruido: atenuarlo es lo que deja que se lean las marcas encima. Un velo
+      // sale gratis; un segundo renderer costaría otro horneado.
+      mctx.fillStyle = "rgba(6, 9, 13, 0.6)";
+      mctx.fillRect(0, 0, MINIMAP_PX, MINIMAP_PX);
+
+      mctx.save();
+      mctx.setTransform(dpr * scale, 0, 0, -dpr * scale, dpr * view.tx, dpr * view.ty);
+      mctx.strokeStyle = "rgba(240, 166, 60, 0.8)";
+      mctx.lineWidth = 1.6 / scale;
+      mctx.stroke(arena.path);
+      mctx.restore();
+
+      // Quien queda en pie. Cuadrados y no círculos: a tres píxeles, un círculo
+      // antialiaseado se convierte en una mancha gris.
+      for (const enemy of enemiesRef.current) {
+        if (enemy.dead || enemy.dying > 0) continue;
+        const ex = enemy.x * scale + view.tx;
+        const ey = -enemy.y * scale + view.ty;
+        if (ex < 0 || ey < 0 || ex > MINIMAP_PX || ey > MINIMAP_PX) continue;
+        // Un borde oscuro bajo cada marca: sin él se pierden sobre una línea
+        // clara del plano justo cuando hace falta contarlas.
+        mctx.fillStyle = UI.abyss;
+        mctx.fillRect(ex - 2.5, ey - 2.5, 5, 5);
+        mctx.fillStyle = UI.critical;
+        mctx.fillRect(ex - 1.5, ey - 1.5, 3, 3);
+      }
+
+      const px = player.x * scale + view.tx;
+      const py = -player.y * scale + view.ty;
+      const angle = -player.angle;
+      const arrow = (reach: number): void => {
+        mctx.beginPath();
+        mctx.moveTo(px + Math.cos(angle) * reach, py + Math.sin(angle) * reach);
+        mctx.lineTo(px + Math.cos(angle + 2.5) * reach * 0.72, py + Math.sin(angle + 2.5) * reach * 0.72);
+        mctx.lineTo(px + Math.cos(angle - 2.5) * reach * 0.72, py + Math.sin(angle - 2.5) * reach * 0.72);
+        mctx.closePath();
+        mctx.fill();
+      };
+      mctx.fillStyle = UI.abyss;
+      arrow(11);
+      mctx.fillStyle = UI.signal;
+      arrow(8.5);
+
+      mctx.fillStyle = UI.inkDim;
+      mctx.font = LABEL_META_FONT;
+      mctx.textAlign = "left";
+      mctx.textBaseline = "alphabetic";
+      mctx.fillText(`${Math.round(framed ? span : MINIMAP_MAX_SPAN)} M`, 7, MINIMAP_PX - 7);
+    };
+
     const draw = (view: Viewport): void => {
       // El plano es el escenario. `PlanRenderer` deja el contexto en píxeles CSS
       // y con la traza ya horneada en un `Path2D`, así que esto es un puñado de
@@ -1361,6 +1471,8 @@ export default function OverheadView({
 
       advance(dt);
       draw(followCamera(dt));
+      // El recinto no cambia de forma: no necesita sesenta refrescos por segundo.
+      if (tick % MINIMAP_INTERVAL_FRAMES === 0) drawMinimap();
 
       hudCountdown -= 1;
       if (hudCountdown <= 0) {
@@ -1453,6 +1565,10 @@ export default function OverheadView({
       />
 
       <KillFeed feed={feed} />
+
+      <div className="border-edge bg-panel pointer-events-none absolute top-3 right-3 border p-[3px]">
+        <canvas ref={minimapRef} className="block" />
+      </div>
 
       <RoundRail total={arenas.length} current={hud.round} />
 

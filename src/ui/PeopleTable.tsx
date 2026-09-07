@@ -30,116 +30,152 @@ export interface PeopleTableProps {
  */
 export type PeopleTableComponent = ComponentType<PeopleTableProps>;
 
+/** Filtro por columna: clave de columna → texto tecleado. */
+type ColumnFilters = Record<string, string>;
+
 /**
  * Tabla plana, sin librería de data-grid: una dependencia menos que sacar
  * después. Las columnas salen de PERSON_COLUMNS, así que agregar un campo es
  * una línea y no tocar este archivo.
+ *
+ * El filtro vive bajo cada encabezado, como en el sistema de referencia: se
+ * busca dentro de una columna, y varias columnas filtradas se combinan con Y.
  */
 export function PeopleTable({
   people,
   emptyMessage,
   zoneLabel = RAW_ZONE_LABEL,
 }: PeopleTableProps) {
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<ColumnFilters>({});
   // Con cientos de filas, filtrar en cada tecla trababa el input.
-  const deferredQuery = useDeferredValue(query);
+  const deferredFilters = useDeferredValue(filters);
   const now = Date.now();
 
   const ctx = useMemo<PersonColumnContext>(() => ({ zoneLabel }), [zoneLabel]);
 
+  const hasFilters = Object.values(filters).some((value) => value.trim() !== "");
+
   const filtered = useMemo(() => {
-    const q = deferredQuery.trim().toLowerCase();
-    if (!q) return people;
-    return people.filter((p) =>
-      PERSON_COLUMNS.some((col) => col.value(p, ctx).toLowerCase().includes(q)),
+    const active = PERSON_COLUMNS.map(
+      (col) => [col, (deferredFilters[col.key] ?? "").trim().toLowerCase()] as const,
+    ).filter(([, query]) => query !== "");
+
+    if (active.length === 0) return people;
+    return people.filter((person) =>
+      active.every(([col, query]) => col.value(person, ctx).toLowerCase().includes(query)),
     );
-  }, [people, deferredQuery, ctx]);
+  }, [people, deferredFilters, ctx]);
 
   if (people.length === 0) {
     return <Empty>{emptyMessage}</Empty>;
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b border-line px-4 py-2.5">
-        <div className="relative">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-dim" />
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filtrar por nombre, empresa o zona"
-            className="w-full rounded-sm border border-line bg-abyss py-1.5 pr-2.5 pl-8 text-sm text-ink placeholder:text-ink-dim focus:border-signal focus:outline-none"
-          />
-        </div>
-      </div>
+    <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
+      <table className="w-full border-collapse text-sm">
+        <colgroup>
+          {PERSON_COLUMNS.map((col) => (
+            <col key={col.key} style={col.width ? { width: col.width } : undefined} />
+          ))}
+          <col style={{ width: "7rem" }} />
+        </colgroup>
 
-      <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
-        <table className="w-full border-collapse text-sm">
-          <colgroup>
-            <col style={{ width: "2.75rem" }} />
+        <thead className="sticky top-0 z-10">
+          <tr>
             {PERSON_COLUMNS.map((col) => (
-              <col key={col.key} style={col.width ? { width: col.width } : undefined} />
-            ))}
-            <col style={{ width: "6rem" }} />
-          </colgroup>
-
-          <thead className="sticky top-0 z-10">
-            <tr className="bg-panel text-[10.5px] font-medium tracking-[0.08em] text-ink-dim uppercase">
-              <th className="border-b border-line py-2" />
-              {PERSON_COLUMNS.map((col) => (
-                <th
-                  key={col.key}
-                  scope="col"
-                  className={cellClass(col, "border-b border-line py-2 font-medium")}
-                >
-                  {col.header}
-                </th>
-              ))}
               <th
+                key={col.key}
                 scope="col"
-                className="hidden border-b border-line py-2 pr-4 text-right font-medium lg:table-cell"
+                className={cellClass(
+                  col,
+                  "border-b border-line bg-panel px-3 pt-3 pb-2 align-top font-medium first:pl-4",
+                )}
               >
-                Permanencia
+                <span className="block text-[12px] leading-snug text-ink-soft">
+                  {col.header}
+                </span>
+                <input
+                  type="search"
+                  value={filters[col.key] ?? ""}
+                  onChange={(event) =>
+                    setFilters((prev) => ({ ...prev, [col.key]: event.target.value }))
+                  }
+                  placeholder="Buscar..."
+                  aria-label={`Buscar en ${col.header}`}
+                  className="mt-1.5 w-full border-b border-line bg-transparent pb-1 text-[12px] font-normal text-ink placeholder:text-ink-dim focus:border-signal focus:outline-none"
+                />
               </th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {filtered.map((person) => (
-              <tr
-                key={person.id}
-                className="border-b border-line/60 transition-colors last:border-b-0 hover:bg-hover"
-              >
-                <td className="py-2 pl-4">
-                  <Initials name={person.name} />
-                </td>
-
-                {PERSON_COLUMNS.map((col) => (
-                  <td key={col.key} className={cellClass(col, "py-2")}>
-                    <Cell column={col} person={person} ctx={ctx} />
-                  </td>
-                ))}
-
-                <td className="hidden py-2 pr-4 text-right lg:table-cell">
-                  <span className="tnum font-mono text-[13px] text-ink-soft">
-                    {formatElapsed(person.detectedAt, now)}
-                  </span>
-                </td>
-              </tr>
             ))}
-          </tbody>
-        </table>
 
-        {filtered.length === 0 && <Empty>Ningún resultado para “{query}”.</Empty>}
-      </div>
+            <th
+              scope="col"
+              className="hidden border-b border-line bg-panel px-3 pt-3 pb-2 pr-4 text-right align-top font-medium lg:table-cell"
+            >
+              <span className="block text-[12px] leading-snug text-ink-soft">
+                Permanencia
+              </span>
+              {/* Calculada al vuelo: no hay texto contra el que buscar. El
+                  hueco mantiene la línea base con el resto de encabezados. */}
+              <span aria-hidden className="mt-1.5 block h-[1.5rem]" />
+            </th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {filtered.map((person) => (
+            <tr
+              key={person.id}
+              className="border-b border-line/60 transition-colors last:border-b-0 hover:bg-hover"
+            >
+              {PERSON_COLUMNS.map((col) => (
+                <td key={col.key} className={cellClass(col, "px-3 py-3 align-top first:pl-4")}>
+                  <Cell column={col} person={person} ctx={ctx} />
+                </td>
+              ))}
+
+              <td className="hidden px-3 py-3 pr-4 text-right align-top lg:table-cell">
+                <span className="tnum font-mono text-[13px] text-ink-soft">
+                  {formatElapsed(person.detectedAt, now)}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {filtered.length === 0 && (
+        <Empty>
+          Ningún resultado con los filtros aplicados.{" "}
+          <button
+            type="button"
+            onClick={() => setFilters({})}
+            className="text-signal underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
+          >
+            Limpiar filtros
+          </button>
+        </Empty>
+      )}
+
+      {hasFilters && filtered.length > 0 && (
+        <p className="px-4 py-2 text-[11px] text-ink-dim">
+          <span className="tnum font-mono">{filtered.length}</span> de{" "}
+          <span className="tnum font-mono">{people.length}</span> personas.{" "}
+          <button
+            type="button"
+            onClick={() => setFilters({})}
+            className="text-signal underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
+          >
+            Limpiar filtros
+          </button>
+        </p>
+      )}
     </div>
   );
 }
 
 /** Alineación y visibilidad son propiedades de la columna, no del renderizado. */
 function cellClass(col: PersonColumn, base: string): string {
-  const align = col.variant === "mono" ? "text-right pr-4" : "text-left pr-3";
+  const align = col.variant === "mono" ? "text-right" : "text-left";
   const responsive = col.secondary ? "hidden md:table-cell" : "";
   return `${base} ${align} ${responsive}`;
 }
@@ -168,43 +204,6 @@ function Cell({
   return <span className="text-ink">{value}</span>;
 }
 
-/**
- * Iniciales en vez de avatar: ancla la vista sin inventar una foto que no
- * tenemos y sin pedir un asset más.
- */
-function Initials({ name }: { name: string }) {
-  const initials = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
-
-  return (
-    <span className="flex size-7 items-center justify-center rounded-sm border border-line bg-raised text-[11px] font-semibold text-ink-soft">
-      {initials}
-    </span>
-  );
-}
-
 function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="px-6 py-12 text-center text-sm text-ink-dim">{children}</p>
-  );
-}
-
-function SearchIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-hidden
-    >
-      <circle cx="7" cy="7" r="4.5" />
-      <path d="m10.5 10.5 3 3" strokeLinecap="round" />
-    </svg>
-  );
+  return <p className="px-6 py-12 text-center text-sm text-ink-dim">{children}</p>;
 }

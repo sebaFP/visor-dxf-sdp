@@ -262,6 +262,7 @@ export function PlanOccupancyViewer({
         people={detail?.people ?? []}
         emptyMessage={detail?.empty ?? ""}
         accent={detail?.accent}
+        updatedAt={updatedAt}
         zoneLabel={zoneLabel}
         table={table}
       />

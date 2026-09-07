@@ -12,10 +12,27 @@ export interface PeopleDialogProps {
   emptyMessage: string;
   /** Color del indicador del encabezado; sale de la rampa de densidad. */
   accent?: string;
+  /** Momento de la última respuesta buena de la fuente, en ms. */
+  updatedAt?: number | null;
   /** Zona legible: descripción → nombre → id. */
   zoneLabel?: ZoneLabeller;
   /** Tabla a usar. Por defecto la del repo; ver `PeopleTableComponent`. */
   table?: PeopleTableComponent;
+}
+
+/** "07-09-2026 10:47:04" — el formato del sistema de referencia. */
+const SYNC_FORMAT = new Intl.DateTimeFormat("es-CL", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function formatSync(ms: number): string {
+  return SYNC_FORMAT.format(new Date(ms)).replace(",", "");
 }
 
 /**
@@ -36,6 +53,7 @@ export function PeopleDialog({
   people,
   emptyMessage,
   accent,
+  updatedAt,
   zoneLabel = RAW_ZONE_LABEL,
   table: Table = PeopleTable,
 }: PeopleDialogProps) {
@@ -64,53 +82,50 @@ export function PeopleDialog({
         if (event.target === ref.current) onClose();
       }}
       aria-labelledby="people-dialog-title"
-      className="w-[min(56rem,calc(100vw-2rem))]"
+      className="w-[min(72rem,calc(100vw-2rem))]"
     >
-      <div className="flex h-[min(38rem,calc(100dvh-4rem))] flex-col overflow-hidden rounded-md border border-edge bg-panel shadow-2xl shadow-black/60">
-        <header className="flex shrink-0 items-start gap-3 border-b border-line px-4 py-3">
-          {accent && (
-            <span
-              aria-hidden
-              className="mt-1.5 size-2.5 shrink-0 rounded-full"
-              style={{ backgroundColor: accent }}
-            />
-          )}
-
-          <div className="mr-auto min-w-0">
+      <div className="flex h-[min(42rem,calc(100dvh-4rem))] flex-col overflow-hidden rounded-md border border-edge bg-panel shadow-2xl shadow-black/60">
+        <header className="shrink-0 border-b border-line px-4 pt-3 pb-3">
+          <div className="flex items-baseline gap-2">
+            {accent && (
+              <span
+                aria-hidden
+                className="size-2.5 shrink-0 translate-y-[-1px] rounded-full"
+                style={{ backgroundColor: accent }}
+              />
+            )}
             <h2
               id="people-dialog-title"
-              className="truncate text-[15px] leading-tight font-semibold text-ink"
+              className="shrink-0 text-[15px] leading-tight font-semibold text-ink"
             >
               {title}
             </h2>
-            <p className="mt-0.5 truncate text-xs text-ink-dim">{subtitle}</p>
+            <p className="min-w-0 truncate text-xs text-ink-dim">{subtitle}</p>
           </div>
 
-          <span className="tnum shrink-0 rounded-sm border border-line bg-raised px-2 py-1 font-mono text-xs text-ink-soft">
-            {people.length} {people.length === 1 ? "persona" : "personas"}
-          </span>
+          {updatedAt != null && (
+            <p className="mt-2 text-[11px] text-ink-dim">
+              Última sincronización:{" "}
+              <span className="tnum font-mono text-ink-soft">{formatSync(updatedAt)}</span>
+            </p>
+          )}
 
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Cerrar"
-            className="shrink-0 rounded-sm border border-line p-1.5 text-ink-dim transition-colors hover:border-edge hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
-          >
-            <svg
-              viewBox="0 0 16 16"
-              className="size-3.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              aria-hidden
-            >
-              <path d="m4 4 8 8M12 4l-8 8" />
-            </svg>
-          </button>
+          <span className="tnum mt-2 inline-flex items-center rounded-full border border-signal/30 bg-signal/12 px-2.5 py-0.5 text-[11px] font-medium text-signal">
+            {people.length} {people.length === 1 ? "Persona" : "Personas"}
+          </span>
         </header>
 
         <Table people={people} emptyMessage={emptyMessage} zoneLabel={zoneLabel} />
+
+        <footer className="flex shrink-0 justify-end border-t border-line px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-sm bg-red-700 px-6 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
+          >
+            Cerrar
+          </button>
+        </footer>
       </div>
     </dialog>
   );

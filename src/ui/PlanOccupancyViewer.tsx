@@ -1,6 +1,18 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  resolvePlan,
+  NO_PLAN_SELECTION,
+  type PlanOption,
+  type PlanSelection,
+} from "../core/dxf/plan-catalog";
 import { formatZoneIds } from "../core/dxf/zones";
 import { aggregateOccupancy } from "../core/occupancy/aggregate";
+import {
+  filterPeople,
+  hasActiveFilters,
+  NO_FILTERS,
+  type PeopleFilterState,
+} from "../core/occupancy/people-filters";
 import {
   formatZoneLabels,
   makeZoneLabeller,
@@ -9,6 +21,7 @@ import {
 import { usePeople } from "../data/people-context";
 import { usePlanQuery } from "../data/use-plan-query";
 import { DARK_THEME, rampColor } from "../core/render/theme";
+import { FilterBar } from "./FilterBar";
 import { PeopleDialog } from "./PeopleDialog";
 import type { PeopleTableComponent } from "./PeopleTable";
 import { PlanCanvas } from "./PlanCanvas";
@@ -27,8 +40,38 @@ import { useFullscreen } from "./use-fullscreen";
  * salen las personas: lee el contexto y ya.
  */
 export interface PlanOccupancyViewerProps {
-  /** Ruta del DXF. La misma que reciba el proveedor de personas. */
+  /**
+   * Ruta del DXF que se dibuja mientras no haya un proyecto elegido. La misma
+   * que reciba el proveedor de personas.
+   */
   planUrl: string;
+  /**
+   * Catálogo de planos para los desplegables «Proyecto» y «Sector».
+   *
+   * Elegir un proyecto **carga otro DXF**: no filtra personas, cambia el
+   * dibujo. Las zonas son las que ese archivo traiga; una zona que no esté
+   * dibujada cae en «Otras zonas», como siempre.
+   *
+   *   <PlanOccupancyViewer
+   *     planUrl="/planos/general.dxf"
+   *     plans={[
+   *       { id: "exp",     proyecto: "Expansión Nivel 320", url: "/planos/exp.dxf" },
+   *       { id: "exp-mina", proyecto: "Expansión Nivel 320", sector: "Interior Mina",
+   *         url: "/planos/exp-mina.dxf" },
+   *     ]}
+   *     onPlanUrlChange={setPlanUrl}
+   *   />
+   *
+   * Sin catálogo los dos desplegables salen apagados y el visor dibuja
+   * `planUrl` y nada más. Ver `src/core/dxf/plan-catalog.ts`.
+   */
+  plans?: readonly PlanOption[];
+  /**
+   * Aviso de que el plano dibujado cambió. Lo necesita quien traiga las
+   * personas: el proveedor de ejemplo reparte gente sobre las zonas del plano
+   * cargado, y una fuente real puede querer pedir solo las de ese proyecto.
+   */
+  onPlanUrlChange?: (url: string, plan: PlanOption | null) => void;
   /** Título de la cabecera. Pasar `null` la oculta y deja solo plano + panel. */
   title?: string | null;
   className?: string;
@@ -57,21 +100,53 @@ export interface PlanOccupancyViewerProps {
   table?: PeopleTableComponent;
   /** Botón de pantalla completa en la cabecera. */
   allowFullscreen?: boolean;
+  /**
+   * Barra de arriba (proyecto, sector, empresa, contrato). `false` la oculta,
+   * dibuja `planUrl` y muestra a todo el mundo.
+   */
+  showFilters?: boolean;
 }
+
+const NO_PLANS: readonly PlanOption[] = [];
 
 export function PlanOccupancyViewer({
   planUrl,
+  plans = NO_PLANS,
+  onPlanUrlChange,
   title = "Ocupación por zonas",
   className = "",
   zones,
   table,
   allowFullscreen = true,
+  showFilters = true,
 }: PlanOccupancyViewerProps) {
-  const plan = usePlanQuery(planUrl);
-  const { label, people, isFetching, error, updatedAt, refresh } = usePeople();
-
   const [selection, setSelection] = useState<Selection>(null);
   const [showBaseText, setShowBaseText] = useState(true);
+  const [filters, setFilters] = useState<PeopleFilterState>(NO_FILTERS);
+  const [planSelection, setPlanSelection] = useState<PlanSelection>(NO_PLAN_SELECTION);
+
+  // Proyecto y sector eligen archivo, no personas: resuelven a una URL y el
+  // visor descarga y parsea ese DXF. Sin nada elegido manda `planUrl`.
+  const selectedPlan = showFilters ? resolvePlan(plans, planSelection) : null;
+  const activeUrl = selectedPlan?.url ?? planUrl;
+
+  const plan = usePlanQuery(activeUrl);
+  const { label, people, isFetching, error, updatedAt, refresh } = usePeople();
+
+  // Otro plano, otras zonas: la que estaba abierta puede no existir en el
+  // nuevo archivo, y el modal se quedaría mostrando una selección fantasma.
+  useEffect(() => setSelection(null), [activeUrl]);
+
+  // El aviso va en un efecto y no en el onChange del desplegable porque la URL
+  // también cambia si el consumidor reemplaza el catálogo o el `planUrl`. Lo
+  // que se lee por ref no va en las dependencias: solo la URL dispara el aviso,
+  // y una función nueva en cada render del consumidor no debe repetirlo.
+  const latest = useRef({ onPlanUrlChange, selectedPlan });
+  latest.current = { onPlanUrlChange, selectedPlan };
+  useEffect(() => {
+    const { onPlanUrlChange: notify, selectedPlan: current } = latest.current;
+    notify?.(activeUrl, current);
+  }, [activeUrl]);
 
   // La pantalla completa se pide sobre la raíz del componente, no sobre el
   // documento: así el visor embebido en una página ajena se expande solo él y
@@ -80,11 +155,22 @@ export function PlanOccupancyViewer({
   const fullscreen = useFullscreen(rootRef);
 
   const doc = plan.data ?? null;
+
+  // El filtro se aplica antes de agregar por zona: plano, panel y modal miran
+  // todos el mismo subconjunto, sin que ninguno tenga que enterarse del filtro.
+  const visible = useMemo(
+    () => (showFilters ? filterPeople(people, filters) : people),
+    [people, filters, showFilters],
+  );
+  const filtering = showFilters && hasActiveFilters(filters);
+
   const occupancy = useMemo(
-    () => (doc ? aggregateOccupancy(people, doc.zoneLayers) : null),
-    [people, doc],
+    () => (doc ? aggregateOccupancy(visible, doc.zoneLayers) : null),
+    [visible, doc],
   );
 
+  // Los rótulos salen del conjunto completo: una zona no debería quedarse sin
+  // nombre solo porque el filtro dejó fuera a las personas que lo traían.
   const zoneLabel = useMemo(() => makeZoneLabeller(zones, people), [zones, people]);
 
   const detail = useMemo(() => {
@@ -200,6 +286,18 @@ export function PlanOccupancyViewer({
         </p>
       )}
 
+      {showFilters && (
+        <FilterBar
+          plans={plans}
+          planSelection={planSelection}
+          onPlanSelectionChange={setPlanSelection}
+          people={people}
+          filters={filters}
+          onFiltersChange={setFilters}
+          matched={visible.length}
+        />
+      )}
+
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1fr_19rem]">
         <section className="relative min-h-0">
           {plan.isPending && <Centered>Cargando plano…</Centered>}
@@ -249,6 +347,7 @@ export function PlanOccupancyViewer({
               selection={selection}
               onSelect={setSelection}
               zoneLabel={zoneLabel}
+              totalUnfiltered={filtering ? people.length : null}
             />
           )}
         </aside>

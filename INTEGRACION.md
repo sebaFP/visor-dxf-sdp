@@ -1,7 +1,7 @@
 # Guía de integración
 
 Todo lo que su equipo necesita cambiar para conectar el visor al sistema real.
-Son cinco puntos, en orden de importancia; los dos primeros son los
+Son seis puntos, en orden de importancia; los dos primeros son los
 obligatorios.
 
 ---
@@ -192,12 +192,16 @@ Todo esto son ~40 líneas en
 
 ## 3. Qué muestra la tabla — `src/ui/person-columns.ts`
 
-Hoy la tabla muestra nombre, empresa, contrato, zona y hora de detección (más
-permanencia, calculada). El RUT **no** se muestra: sigue siendo `Person.id`, la
-identidad del registro, pero no aporta nada a quien mira una zona en pantalla.
+Hoy la tabla muestra nombre, cargo, especialidad, empresa, contrato, zona y
+fecha y hora de detección, `10-09-26 09:34` (más permanencia, calculada). La
+hora sola no bastaba: alguien detectado ayer a las 09:34 se leía idéntico a
+alguien de hoy. El RUT **no** se muestra: sigue siendo
+`Person.id`, la identidad del registro, pero no aporta nada a quien mira una zona
+en pantalla.
 
-`empresa` y `contrato` salen de `Person.extra`; si su fuente no los trae, esas
-dos celdas muestran `—`.
+`cargo`, `especialidad`, `empresa` y `contrato` salen de `Person.extra`; si su
+fuente no los trae, esas celdas muestran `—`. Cargo y especialidad se ocultan
+bajo el breakpoint `md`, donde no cabrían siete columnas.
 
 **No hace falta renombrar nada al mapear.** El mismo dato viaja con nombre
 distinto según de dónde salga —el maestro de personas los llama `empresa` y
@@ -205,14 +209,23 @@ distinto según de dónde salga —el maestro de personas los llama `empresa` y
 ubicación emiten además `EMPRESA` y `CONTRATO` en mayúsculas—, así que la tabla
 compara las claves normalizadas, igual que hace con las de zona:
 
-| Campo    | Claves aceptadas en `extra` (en cualquier grafía)                                     |
-| -------- | -------------------------------------------------------------------------------------- |
-| empresa  | `EMPRESA`, `NOMBRE_EMPRESA`, `EMPRESA_NOMBRE`, `RAZON_SOCIAL`, `company`                |
-| contrato | `CONTRATO`, `NROCONTRATO`, `N_CONTRATO`, `NUMERO_CONTRATO`, `ID_CONTRATO`, `contract`   |
+| Campo        | Claves aceptadas en `extra` (en cualquier grafía)                                          |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| cargo        | `CARGO`, `NOMBRE_CARGO`, `CARGO_NOMBRE`, `DESCRIPCION_CARGO`, `PUESTO`, `role`, `position`   |
+| especialidad | `ESPECIALIDAD`, `NOMBRE_ESPECIALIDAD`, `DESCRIPCION_ESPECIALIDAD`, `DISCIPLINA`, `specialty` |
+| empresa      | `EMPRESA`, `NOMBRE_EMPRESA`, `EMPRESA_NOMBRE`, `RAZON_SOCIAL`, `company`                     |
+| contrato     | `CONTRATO`, `NROCONTRATO`, `N_CONTRATO`, `NUMERO_CONTRATO`, `ID_CONTRATO`, `contract`        |
 
 Mayúsculas, guiones bajos, espacios y acentos dan lo mismo: `NRO_CONTRATO`,
 `nroContrato` y `"nro contrato"` son la misma clave. Un valor en blanco cuenta
 como ausente y la celda muestra `—`.
+
+Los conjuntos de claves están declarados en
+[`src/core/occupancy/person-fields.ts`](src/core/occupancy/person-fields.ts) —
+no en las columnas — porque los desplegables de empresa y contrato leen los
+mismos campos, y un campo declarado dos veces se desincroniza a la primera
+grafía nueva. `person-columns.ts` los reexporta, así que el import de siempre
+sigue andando.
 
 Ojo con una diferencia que no es del visor: la razón social de la sábana de
 turnos y el nombre corto del maestro de personas **no son el mismo string**
@@ -227,6 +240,8 @@ Para agregar un campo:
 ```ts
 export const PERSON_COLUMNS: PersonColumn[] = [
   { key: "name",     header: "Nombre",   value: (p) => p.name },
+  { key: "cargo",    header: "Cargo",    value: (p) => personField(p, ROLE_KEYS) ?? "—", secondary: true },
+  { key: "especialidad", header: "Especialidad", value: (p) => personField(p, SPECIALTY_KEYS) ?? "—", secondary: true },
   { key: "empresa",  header: "Empresa",  value: (p) => personField(p, COMPANY_KEYS) ?? "—" },
   { key: "contrato", header: "Contrato", value: (p) => personField(p, CONTRACT_KEYS) ?? "—", variant: "mono", width: "7.5rem" },
   { key: "zoneId",   header: "Zona",     value: (p, ctx) => ctx.zoneLabel(p.zoneId), variant: "chip" },
@@ -254,6 +269,11 @@ Ignórenlo si su columna no lo necesita.
 
 La columna de iniciales y la de permanencia no salen de acá: son fijas.
 
+El contador del encabezado del modal sigue al filtro: muestra cuántas filas
+quedan visibles y, cuando hay filtro puesto, agrega «de N personas en total».
+La tabla lo avisa con `onVisibleCountChange`; una tabla propia que no lo llame
+deja el contador en el total, sin romper nada.
+
 ### Usar otra tabla completa — `table`
 
 Si necesitan su propio data-grid (ordenar por columna, agrupar, exportar a
@@ -263,7 +283,7 @@ componente.
 ```tsx
 import type { PeopleTableProps } from "./ui/PeopleTable";
 
-function MiTabla({ people, emptyMessage, zoneLabel }: PeopleTableProps) {
+function MiTabla({ people, emptyMessage, zoneLabel, onVisibleCountChange }: PeopleTableProps) {
   // lo que sea: AG Grid, TanStack Table, MUI DataGrid…
 }
 
@@ -277,6 +297,7 @@ interface PeopleTableProps {
   people: Person[];              // ya filtradas y ordenadas por detección
   emptyMessage: string;          // qué decir cuando no hay nadie
   zoneLabel?: ZoneLabeller;      // (zoneId) => rótulo legible
+  onVisibleCountChange?: (n: number) => void;  // cuántas filas deja ver su filtro
 }
 ```
 
@@ -286,18 +307,150 @@ solo ponen lo de adentro.
 
 ---
 
-## 4. El componente y su caché
+## 4. La barra de arriba — proyecto, sector, empresa, contrato
+
+Cuatro desplegables que se ven iguales y hacen **dos cosas distintas**. Conviene
+tenerlo claro antes de tocarlos:
+
+| Desplegable | Qué hace                    | Dónde vive                                |
+| ----------- | --------------------------- | ----------------------------------------- |
+| Proyecto    | Elige **qué DXF se carga**  | `src/core/dxf/plan-catalog.ts`            |
+| Sector      | Elige **qué DXF se carga**  | `src/core/dxf/plan-catalog.ts`            |
+| Empresa     | Filtra **qué gente se ve**  | `src/core/occupancy/people-filters.ts`    |
+| Contrato    | Filtra **qué gente se ve**  | `src/core/occupancy/people-filters.ts`    |
+
+Cada par es su propia cascada —el sector depende del proyecto, el contrato
+depende de la empresa— y entre pares no hay relación.
+
+### a) Proyecto y sector — el catálogo de planos
+
+Elegir un proyecto **cambia el dibujo**: el visor descarga y parsea otro DXF.
+Las zonas son las que ese archivo traiga; no hay que declarar en ninguna parte
+qué zona pertenece a qué proyecto. Una zona que no esté dibujada en el plano
+cargado cae en «Otras zonas», exactamente como siempre.
+
+El catálogo es una lista plana:
+
+```tsx
+import type { PlanOption } from "./core/dxf/plan-catalog";
+
+const PLANS: PlanOption[] = [
+  // Sin `sector`: el plano general del proyecto.
+  { id: "exp",      proyecto: "Expansión Nivel 320",     url: "/planos/exp.dxf" },
+  { id: "exp-mina", proyecto: "Expansión Nivel 320",     sector: "Interior Mina",
+    url: "/planos/exp-mina.dxf" },
+  { id: "exp-plta", proyecto: "Expansión Nivel 320",     sector: "Planta",
+    url: "/planos/exp-planta.dxf" },
+  { id: "cont",     proyecto: "Continuidad Operacional", url: "/planos/cont.dxf" },
+];
+
+<PlanOccupancyViewer planUrl="/plano.dxf" plans={PLANS} />;
+```
+
+Las reglas de resolución, todas en un archivo de ~30 líneas:
+
+- **Sin proyecto elegido** se dibuja el `planUrl` que recibe el visor. Es el
+  estado inicial: el plano general de la faena.
+- **Con proyecto y sin sector** gana la entrada sin `sector` de ese proyecto. Si
+  el proyecto no tiene una, se toma su primer plano — mejor que dejar el lienzo
+  en blanco esperando que elijan un sector.
+- **Cambiar de proyecto limpia el sector.** Los sectores de un proyecto no
+  existen en otro, y dejarlo puesto apuntaría a un plano que no está en la lista.
+- **Sin proyecto elegido no se ofrecen sectores.** Un sector solo significa algo
+  dentro de su proyecto; mezclarlos daría una lista donde dos «Norte» de
+  proyectos distintos se ven idénticos.
+- **Sin catálogo** los dos desplegables salen apagados, no vacíos: se ve de
+  inmediato que no hay nada configurado y no parece que estén rotos.
+
+Al cambiar el plano, la zona que estuviera abierta se deselecciona: puede no
+existir en el archivo nuevo.
+
+#### Si su fuente de personas depende del plano
+
+El visor avisa cada vez que cambia el DXF dibujado:
+
+```tsx
+const [planUrl, setPlanUrl] = useState(PLAN_URL);
+
+<SamplePeopleProvider planUrl={planUrl}>
+  <PlanOccupancyViewer planUrl={PLAN_URL} plans={PLANS} onPlanUrlChange={setPlanUrl} />
+</SamplePeopleProvider>;
+```
+
+`onPlanUrlChange(url, plan)` entrega también la entrada elegida, así que una
+fuente real puede pedir solo las personas de ese proyecto o sector en vez de
+traerlas todas. Si su API no depende del plano, ignórenlo: es opcional.
+
+### b) Empresa y contrato — el filtro de personas
+
+Estos sí filtran gente, y lo hacen **antes** de repartirla por zona: el plano,
+los conteos del panel lateral y la tabla del modal miran siempre el mismo
+subconjunto. No hay forma de que uno diga una cosa y otro diga otra.
+
+No hay que configurarlos. Se llenan solos con lo que traigan las lecturas en
+`Person.extra`, con las mismas grafías tolerantes del punto 3 (`EMPRESA`,
+`NOMBRE_EMPRESA`, `RAZON_SOCIAL`; `CONTRATO`, `NROCONTRATO`, `ID_CONTRATO`…).
+Son los mismos campos que muestran las columnas de la tabla: están declarados
+una sola vez, en
+[`src/core/occupancy/person-fields.ts`](src/core/occupancy/person-fields.ts).
+
+Con nada puesto, **«Empresa» lista las empresas de todos los datos**; elegida
+una, **«Contrato» ofrece solo los contratos de esa empresa**. Sin la cascada el
+segundo desplegable ofrecería códigos que no dan ninguna fila. Cambiar de
+empresa limpia el contrato, por lo mismo.
+
+Un campo que su fuente no manda deja su desplegable apagado.
+
+El panel lateral avisa que hay filtro: «Total detectadas» muestra `340 de 1652`.
+La barra agrega un «Limpiar filtros» mientras haya algo puesto.
+
+### Apagar la barra entera
+
+```tsx
+<PlanOccupancyViewer planUrl="/plano.dxf" showFilters={false} />
+```
+
+Dibuja `planUrl` y muestra a todo el mundo.
+
+### Agregar o cambiar un filtro de personas
+
+La lista vive en
+[`src/core/occupancy/people-filters.ts`](src/core/occupancy/people-filters.ts) y
+es literalmente un arreglo. El orden del arreglo **es** el orden de la cascada:
+
+```ts
+export const PEOPLE_FILTERS: readonly PeopleFilterDef[] = [
+  { key: "empresa",  label: "Empresa",  allLabel: "Todas", read: readCompany },
+  { key: "contrato", label: "Contrato", allLabel: "Todos", read: readContract },
+];
+```
+
+`allLabel` es cómo se llama «sin filtrar» en ese desplegable. `read` es
+cualquier función `(person) => string | null`: para un campo con nombre fijo
+basta `(p) => textValue(p.extra?.turno)`; para uno que puede llegar con varias
+grafías, `personField(p, MIS_CLAVES)`.
+
+Ambos módulos son puros y no importan React: `filterPeople`,
+`buildFilterOptions`, `resolvePlan` y compañía se pueden usar desde su propio
+código si arman la barra por su cuenta.
+
+---
+
+## 5. El componente y su caché
 
 `<PlanOccupancyViewer>` es lo que montan. Su API completa:
 
 ```tsx
 interface PlanOccupancyViewerProps {
-  planUrl: string;               // ruta del DXF (la misma que reciba el proveedor)
+  planUrl: string;               // DXF por defecto, sin proyecto elegido
+  plans?: readonly PlanOption[]; // catálogo de proyecto/sector; ver punto 4
+  onPlanUrlChange?: (url: string, plan: PlanOption | null) => void;
   title?: string | null;         // null oculta la cabecera y deja plano + panel
   className?: string;
   zones?: ZoneCatalog;           // nombres de zona; ver punto 2
   table?: PeopleTableComponent;  // otra tabla para el modal; ver punto 3
   allowFullscreen?: boolean;     // botón de pantalla completa (por defecto true)
+  showFilters?: boolean;         // barra de arriba; ver punto 4 (por defecto true)
 }
 ```
 
@@ -349,7 +502,7 @@ Si cambia, cambia su URL.
 
 ---
 
-## 5. Si su convención de capas es distinta — `src/core/dxf/zones.ts`
+## 6. Si su convención de capas es distinta — `src/core/dxf/zones.ts`
 
 Todo el conocimiento sobre nombres de capa está en un archivo de ~20 líneas:
 

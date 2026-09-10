@@ -102,6 +102,15 @@ body {
   background: var(--color-abyss);
 }
 
+/* La lista desplegable de un <select> la pinta el sistema operativo, no el
+   CSS del control. Con la caja en `bg-transparent`, Chrome hereda transparente
+   y las opciones salen sin fondo propio; fijarlo acá deja el desplegable del
+   color del panel en vez de al azar. */
+select option {
+  background-color: var(--color-panel);
+  color: var(--color-ink);
+}
+
 /* El <dialog> nativo trae márgenes y borde de agente de usuario. */
 dialog {
   margin: auto;

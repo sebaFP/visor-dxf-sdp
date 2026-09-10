@@ -1,4 +1,10 @@
 import { personField } from "../core/occupancy/extra-fields";
+import {
+  COMPANY_KEYS,
+  CONTRACT_KEYS,
+  ROLE_KEYS,
+  SPECIALTY_KEYS,
+} from "../core/occupancy/person-fields";
 import type { Person } from "../core/occupancy/types";
 import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 
@@ -42,7 +48,18 @@ export interface PersonColumn {
   secondary?: boolean;
 }
 
-const TIME_FORMAT = new Intl.DateTimeFormat("es-CL", {
+/**
+ * "10-09-26 09:34" — día y hora de la detección.
+ *
+ * La hora sola no basta: la gente queda detectada horas después de su último
+ * paso, y una lectura de ayer a las 09:34 se lee idéntica a una de hoy. El año
+ * va en dos cifras para que la columna quepa junto al resto; para verlo
+ * completo, cambien `year` a `"numeric"` acá y nada más.
+ */
+const DETECTED_FORMAT = new Intl.DateTimeFormat("es-CL", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "2-digit",
   hour: "2-digit",
   minute: "2-digit",
   hour12: false,
@@ -50,7 +67,10 @@ const TIME_FORMAT = new Intl.DateTimeFormat("es-CL", {
 
 export function formatTime(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : TIME_FORMAT.format(date);
+  if (Number.isNaN(date.getTime())) return "—";
+  // es-CL mete una coma entre fecha y hora; un espacio ocupa menos y se lee
+  // igual de bien en una celda monoespaciada.
+  return DETECTED_FORMAT.format(date).replace(",", "");
 }
 
 export function formatElapsed(iso: string, now: number): string {
@@ -63,39 +83,35 @@ export function formatElapsed(iso: string, now: number): string {
 }
 
 /**
- * Grafías aceptadas para empresa y contrato en `Person.extra`.
- *
- * No es paranoia: el mismo dato viaja con nombre distinto según de dónde salga.
- * En el sistema de referencia, el maestro de personas los llama `empresa` y
- * `nrocontrato`, la sábana de turnos `empresa` y `contrato`, y los endpoints de
- * ubicación emiten además `EMPRESA` y `CONTRATO` en mayúsculas. Se comparan
- * normalizadas (sin mayúsculas, separadores ni acentos), así que `NRO_CONTRATO`
- * y `nroContrato` son la misma clave.
+ * Las grafías aceptadas de cada campo viven en
+ * [`src/core/occupancy/person-fields.ts`](../core/occupancy/person-fields.ts),
+ * porque también las usan los filtros del plano. Se reexportan acá para que
+ * quien agregue una columna las tenga a mano sin cambiar de import.
  */
-export const COMPANY_KEYS = new Set([
-  "empresa",
-  "nombreempresa",
-  "empresanombre",
-  "razonsocial",
-  "company",
-]);
-
-export const CONTRACT_KEYS = new Set([
-  "contrato",
-  "nrocontrato",
-  "ncontrato",
-  "numerocontrato",
-  "contratonumero",
-  "idcontrato",
-  "contract",
-  "contractnumber",
-]);
+export {
+  COMPANY_KEYS,
+  CONTRACT_KEYS,
+  ROLE_KEYS,
+  SPECIALTY_KEYS,
+} from "../core/occupancy/person-fields";
 
 /** Marca de campo ausente. Una celda vacía se lee como un fallo de la tabla. */
 const MISSING = "—";
 
 export const PERSON_COLUMNS: PersonColumn[] = [
   { key: "name", header: "Nombre", value: (p) => p.name },
+  {
+    key: "cargo",
+    header: "Cargo",
+    value: (p) => personField(p, ROLE_KEYS) ?? MISSING,
+    secondary: true,
+  },
+  {
+    key: "especialidad",
+    header: "Especialidad",
+    value: (p) => personField(p, SPECIALTY_KEYS) ?? MISSING,
+    secondary: true,
+  },
   {
     key: "empresa",
     header: "Empresa",
@@ -115,7 +131,8 @@ export const PERSON_COLUMNS: PersonColumn[] = [
     header: "Detección",
     value: (p) => formatTime(p.detectedAt),
     variant: "mono",
-    width: "5.5rem",
+    // Ancho para "10-09-26 09:34": con 5.5rem la fecha se partía en dos líneas.
+    width: "9.5rem",
     secondary: true,
   },
 ];

@@ -37,8 +37,14 @@ dónde salen las personas: las lee del contexto que le da el proveedor.
   densidad de personas y les pone encima una insignia con el conteo.
 - Muestra cada zona por su **nombre**, no por su id: usa la descripción, o el
   nombre si no hay descripción, o el id si no hay ninguno de los dos.
+- **Barra de arriba** con cuatro desplegables, que hacen dos cosas distintas:
+  **proyecto** y **sector** eligen qué DXF se carga; **empresa** y **contrato**
+  filtran las personas antes de repartirlas por zona, así que el plano, los
+  conteos y la tabla miran siempre el mismo subconjunto. Cada par es su propia
+  cascada: el sector depende del proyecto, el contrato depende de la empresa.
 - Clic en una zona (en el plano o en la lista lateral) → modal con la tabla de
-  personas, filtrable. La tabla es reemplazable por la suya.
+  personas, filtrable por columna, con el recuento «N de M» arriba a la derecha.
+  La tabla es reemplazable por la suya.
 - Panel **"Otras zonas"**: total de personas cuya zona no está dibujada en el
   plano, con su propia tabla. Nunca se descartan en silencio.
 - Pan, zoom, ajuste a la vista y enfoque automático a la zona seleccionada, más
@@ -76,10 +82,14 @@ src/
       geometry.ts           Bulges, arcos, elipses, splines, centroides, hit-test
       parse-dxf.ts          dxf-parser → modelo normalizado + expansión de bloques
       zones.ts              Convención de nombres de capa
+      plan-catalog.ts       Proyecto/sector → qué DXF se carga
     occupancy/
       types.ts              Person, PeopleSource — EL CONTRATO con su sistema
       aggregate.ts          personas[] → conteo por capa + "otras zonas"
       zone-names.ts         id de zona → descripción / nombre / id
+      extra-fields.ts       Lectura tolerante de Person.extra (grafías)
+      person-fields.ts      Qué claves son empresa, contrato, cargo, especialidad
+      people-filters.ts     Empresa y contrato en cascada, sin React
     render/
       viewport.ts           Matemática de pan/zoom (world ↔ screen)
       theme.ts              Todos los colores
@@ -94,6 +104,7 @@ src/
   ui/                       ← React. Reemplazable por completo.
     PlanOccupancyViewer.tsx ← EL COMPONENTE que montan en su app
     PlanCanvas.tsx          Canvas + insignias HTML + panel de cámara
+    FilterBar.tsx           Los cuatro desplegables de arriba
     Sidebar.tsx             Resumen, "otras zonas", lista de zonas
     PeopleDialog.tsx        Modal (<dialog> nativo)
     PeopleTable.tsx         Tabla por defecto + el contrato para reemplazarla

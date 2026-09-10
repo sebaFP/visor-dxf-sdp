@@ -39,10 +39,16 @@ const ROLES = [
   "Jefe de Turno", "Ayudante", "Ingeniero de Proceso",
 ];
 
+/** Mirrors `especialidad` in the reference schema. */
+const SPECIALTIES = [
+  "Mecánica", "Eléctrica", "Instrumentación", "Obras Civiles", "Soldadura",
+  "Cañerías", "Estructuras", "Fortificación", "Ventilación", "Sin especialidad",
+];
+
 /**
- * Empresa contratista y su contrato vigente, emparejados a propósito: en la
- * tabla las dos columnas salen de la misma persona, y una empresa con tres
- * contratos distintos delataría de inmediato que el dato es inventado.
+ * Empresa contratista y sus contratos vigentes. Varias tienen más de uno a
+ * propósito: es lo que hace visible la cascada de la barra de filtros —
+ * elegida la empresa, «Contrato» ofrece solo los suyos.
  *
  * Se imita la forma del sistema de referencia: nombre corto de la contratista
  * (como el maestro de personas, no la razón social completa de la sábana de
@@ -50,14 +56,14 @@ const ROLES = [
  * ficticios — no son contratistas reales de ninguna faena.
  */
 const CONTRACTORS = [
-  { empresa: "MONTAJES ANDINOS", contrato: "4600031102" },
-  { empresa: "SERVICIOS CORDILLERA", contrato: "4600030418" },
-  { empresa: "INGENIERIA ALTIPLANO", contrato: "4600029871" },
-  { empresa: "MANTENCION AUSTRAL", contrato: "4600030339" },
-  { empresa: "CONSTRUCCIONES ELQUI", contrato: "4600031540" },
-  { empresa: "PERFORACIONES LOA", contrato: "4600030765" },
+  { empresa: "MONTAJES ANDINOS", contratos: ["4600031102", "4600031877"] },
+  { empresa: "SERVICIOS CORDILLERA", contratos: ["4600030418"] },
+  { empresa: "INGENIERIA ALTIPLANO", contratos: ["4600029871", "4600030044", "4600031299"] },
+  { empresa: "MANTENCION AUSTRAL", contratos: ["4600030339", "4600030612"] },
+  { empresa: "CONSTRUCCIONES ELQUI", contratos: ["4600031540"] },
+  { empresa: "PERFORACIONES LOA", contratos: ["4600030765", "4600031008"] },
   // Personal de la propia faena: no entra por contrato de terceros.
-  { empresa: "PERSONAL PROPIO", contrato: null },
+  { empresa: "PERSONAL PROPIO", contratos: [] },
 ];
 
 /** Zones that exist in the detection system but are not drawn on this plan. */
@@ -126,6 +132,19 @@ function zoneNaming(zoneId: string): { ZONA: string; ZONA_DESCRIPCION: string } 
   };
 }
 
+/** Empresa y uno de sus contratos. `null` para el personal propio. */
+function contractorFields(rand: () => number): {
+  empresa: string;
+  contrato: string | null;
+} {
+  const contractor = pick(rand, CONTRACTORS);
+  return {
+    empresa: contractor.empresa,
+    contrato:
+      contractor.contratos.length === 0 ? null : pick(rand, contractor.contratos),
+  };
+}
+
 export interface MockOptions {
   /** Zone IDs actually drawn on the plan — pass `doc.zoneLayers.flatMap(z => z.zoneIds)`. */
   mappedZoneIds: string[];
@@ -171,9 +190,11 @@ export function generatePeople(options: MockOptions): Person[] {
       extra: {
         area: pick(rand, AREAS),
         cargo: pick(rand, ROLES),
+        especialidad: pick(rand, SPECIALTIES),
         tag: `TAG-${1000 + Math.floor(rand() * 9000)}`,
-        // Un solo spread: empresa y contrato quedan siempre coherentes.
-        ...pick(rand, CONTRACTORS),
+        // El contrato sale de la empresa ya elegida: nunca queda uno que no le
+        // corresponda, que es justo lo que la cascada de filtros supone.
+        ...contractorFields(rand),
         // Nombres del esquema de referencia (ID_ZONA / ZONA / ZONA_DESCRIPCION).
         // El visor los detecta solos y rotula la zona con ellos en vez de
         // mostrar el id crudo; ID_ZONA es `zoneId` y por eso no va acá.

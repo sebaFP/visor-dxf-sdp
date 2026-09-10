@@ -19,6 +19,11 @@ export interface SidebarProps {
   onSelect: (selection: Selection) => void;
   /** Zona legible: descripción → nombre → id. */
   zoneLabel?: ZoneLabeller;
+  /**
+   * Personas antes de filtrar, para que el total diga «de N» y no parezca que
+   * el sistema dejó de detectar gente. `null` cuando no hay filtro puesto.
+   */
+  totalUnfiltered?: number | null;
 }
 
 export function Sidebar({
@@ -27,6 +32,7 @@ export function Sidebar({
   selection,
   onSelect,
   zoneLabel = RAW_ZONE_LABEL,
+  totalUnfiltered = null,
 }: SidebarProps) {
   const layers = [...doc.zoneLayers].sort((a, b) => {
     const ca = occupancy.byLayer.get(a.layer)?.count ?? 0;
@@ -40,7 +46,11 @@ export function Sidebar({
   return (
     <div className="flex min-h-0 flex-col overflow-y-auto overscroll-contain">
       <div className="grid shrink-0 grid-cols-2 border-b border-line">
-        <Stat label="Total detectadas" value={occupancy.total} />
+        <Stat
+          label="Total detectadas Interior Mina"
+          value={occupancy.total}
+          hint={totalUnfiltered != null ? `de ${totalUnfiltered}` : undefined}
+        />
         <Stat label="En el plano" value={occupancy.mappedCount} divided />
       </div>
 
@@ -89,7 +99,7 @@ export function Sidebar({
           const ids = formatZoneIds(zl.zoneIds);
           const sub =
             zl.zoneIds.length > 1
-              ? `capa ${zl.layer} · ${zl.zoneIds.length} zonas: ${ids}`
+              ? `capa ${zl.layer} · ${zl.zoneIds.length} zonas agrupadas`
               : label !== ids
                 ? `zona ${ids}`
                 : null;
@@ -150,15 +160,25 @@ function Stat({
   label,
   value,
   divided,
+  hint,
 }: {
   label: string;
   value: number;
   divided?: boolean;
+  /** Segunda cifra al lado, en chico. Hoy: el total sin filtrar. */
+  hint?: string;
 }) {
   return (
     <div className={`px-4 py-3 ${divided ? "border-l border-line" : ""}`}>
-      <div className="tnum font-mono text-2xl leading-none font-semibold text-ink">
-        {value}
+      <div className="flex items-baseline gap-1.5">
+        <span className="tnum font-mono text-2xl leading-none font-semibold text-ink">
+          {value}
+        </span>
+        {hint && (
+          <span className="tnum font-mono text-[11px] leading-none text-ink-dim">
+            {hint}
+          </span>
+        )}
       </div>
       <div className="mt-1.5 text-[11px] text-ink-dim">{label}</div>
     </div>

@@ -49,9 +49,11 @@ export function SamplePeopleProvider({
     [mappedZoneIds, total, unmappedRatio],
   );
 
-  // La identidad incluye las zonas: mientras el plano no cargó la lista está
-  // vacía, y no queremos que esa tanda vacía quede cacheada como la buena.
-  const sourceId = `sample:${mappedZoneIds.length}:${total}:${unmappedRatio}`;
+  // La identidad incluye el plano y sus zonas: mientras el DXF no cargó la
+  // lista está vacía, y no queremos que esa tanda vacía quede cacheada como la
+  // buena. La URL va aparte porque dos planos distintos pueden tener la misma
+  // cantidad de zonas, y ahí la gente del anterior se reusaría sobre el nuevo.
+  const sourceId = `sample:${planUrl}:${mappedZoneIds.length}:${total}:${unmappedRatio}`;
 
   return (
     <PeopleProvider

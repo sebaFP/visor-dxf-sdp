@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState, type ComponentType } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type ComponentType } from "react";
 import type { Person } from "../core/occupancy/types";
 import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 import {
@@ -16,6 +16,13 @@ export interface PeopleTableProps {
    * El visor siempre lo pasa; solo importa si montan la tabla por su cuenta.
    */
   zoneLabel?: ZoneLabeller;
+  /**
+   * Cuántas filas quedan visibles tras filtrar. El encabezado del modal muestra
+   * ese número, y el filtrado vive acá adentro; sin este aviso el contador de
+   * arriba seguiría diciendo el total. Una tabla propia puede ignorarlo: el
+   * modal cae al total cuando nadie avisa.
+   */
+  onVisibleCountChange?: (count: number) => void;
 }
 
 /**
@@ -45,6 +52,7 @@ export function PeopleTable({
   people,
   emptyMessage,
   zoneLabel = RAW_ZONE_LABEL,
+  onVisibleCountChange,
 }: PeopleTableProps) {
   const [filters, setFilters] = useState<ColumnFilters>({});
   // Con cientos de filas, filtrar en cada tecla trababa el input.
@@ -65,6 +73,14 @@ export function PeopleTable({
       active.every(([col, query]) => col.value(person, ctx).toLowerCase().includes(query)),
     );
   }, [people, deferredFilters, ctx]);
+
+  // Depende del arreglo y no de su largo: al refrescarse los datos el resultado
+  // se recalcula pero puede tener el mismo tamaño, y con `filtered.length` en
+  // las dependencias el aviso no volvía a salir y el contador de arriba se
+  // quedaba pegado en el total mientras el filtro seguía puesto.
+  useEffect(() => {
+    onVisibleCountChange?.(filtered.length);
+  }, [filtered, onVisibleCountChange]);
 
   if (people.length === 0) {
     return <Empty>{emptyMessage}</Empty>;
@@ -158,8 +174,7 @@ export function PeopleTable({
 
       {hasFilters && filtered.length > 0 && (
         <p className="px-4 py-2 text-[11px] text-ink-dim">
-          <span className="tnum font-mono">{filtered.length}</span> de{" "}
-          <span className="tnum font-mono">{people.length}</span> personas.{" "}
+          {/* El recuento va en el encabezado del modal; acá basta la salida. */}
           <button
             type="button"
             onClick={() => setFilters({})}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DxfDocument, Vec2, ZoneLayer, ZoneRing } from "../core/dxf/types";
-import { personField } from "../core/occupancy/extra-fields";
+import { readContract } from "../core/occupancy/person-fields";
 import type { OccupancySnapshot, Person } from "../core/occupancy/types";
 import { formatZoneLabels, RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 import { placePeople, type Placement } from "../core/render/placement";
@@ -29,7 +29,6 @@ import {
   UI,
   useKillFeed,
 } from "./mode-hud";
-import { CONTRACT_KEYS } from "./person-columns";
 
 /**
  * Recorrido cenital del plano.
@@ -874,9 +873,10 @@ export default function OverheadView({
       particles.length = write;
     };
 
+    let defeatTimer = 0;
     const surrender = (): void => {
       setDefeated(true);
-      window.setTimeout(() => exitRef.current(), DEFEAT_MS);
+      defeatTimer = window.setTimeout(() => exitRef.current(), DEFEAT_MS);
     };
 
     const advance = (dt: number): void => {
@@ -1096,7 +1096,7 @@ export default function OverheadView({
         const x = toScreenX(enemy.x, view);
         const y = toScreenY(enemy.y, view) - (ZOMBIE_WIDTH * view.scale) / 2 - 6;
         const name = enemy.person.name;
-        const contract = personField(enemy.person, CONTRACT_KEYS);
+        const contract = readContract(enemy.person);
         const meta = `${companyOf(enemy.person)}${contract ? ` · ${contract}` : ""}`;
 
         ctx.font = LABEL_NAME_FONT;
@@ -1516,6 +1516,7 @@ export default function OverheadView({
 
     return () => {
       running = false;
+      window.clearTimeout(defeatTimer);
       observer.disconnect();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);

@@ -12,6 +12,8 @@ import {
   hasActiveFilters,
   setFilter,
   NO_FILTERS,
+  PEOPLE_FILTERS,
+  type PeopleFilterDef,
   type PeopleFilterState,
 } from "../core/occupancy/people-filters";
 import type { Person } from "../core/occupancy/types";
@@ -28,6 +30,8 @@ export interface FilterBarProps {
   onFiltersChange: (next: PeopleFilterState) => void;
   /** Cuántas quedan tras filtrar. Solo para el aviso de la derecha. */
   matched?: number;
+  /** Qué desplegables de personas se dibujan. El orden es la cascada. */
+  filterDefs?: readonly PeopleFilterDef[];
 }
 
 /**
@@ -54,6 +58,7 @@ export function FilterBar({
   filters,
   onFiltersChange,
   matched,
+  filterDefs = PEOPLE_FILTERS,
 }: FilterBarProps) {
   const projects = useMemo(() => projectsOf(plans), [plans]);
   const sectors = useMemo(
@@ -61,11 +66,11 @@ export function FilterBar({
     [plans, planSelection.proyecto],
   );
   const peopleFilters = useMemo(
-    () => buildFilterOptions(people, filters),
-    [people, filters],
+    () => buildFilterOptions(people, filters, filterDefs),
+    [people, filters, filterDefs],
   );
 
-  const active = hasActiveFilters(filters);
+  const active = hasActiveFilters(filters, filterDefs);
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-5 border-b border-line bg-canvas px-4 pt-5 pb-4">
@@ -97,7 +102,7 @@ export function FilterBar({
           allLabel={filter.allLabel}
           value={filter.value}
           options={filter.options}
-          onPick={(value) => onFiltersChange(setFilter(filters, filter.key, value))}
+          onPick={(value) => onFiltersChange(setFilter(filters, filter.key, value, filterDefs))}
         />
       ))}
 

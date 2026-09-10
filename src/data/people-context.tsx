@@ -68,17 +68,21 @@ export function PeopleProvider({
     staleTime: refreshIntervalMs > 0 ? refreshIntervalMs / 2 : 0,
   });
 
+  // Deps campo por campo: el objeto `query` es nuevo en cada render y con él
+  // como dependencia el contexto cambiaba de identidad siempre, arrastrando a
+  // todos los consumidores.
+  const { data, isPending, isFetching, error, dataUpdatedAt, refetch } = query;
   const value = useMemo<PeopleContextValue>(
     () => ({
       label: source.label,
-      people: query.data ?? [],
-      isLoading: query.isPending,
-      isFetching: query.isFetching,
-      error: query.error,
-      updatedAt: query.dataUpdatedAt || null,
-      refresh: () => void query.refetch(),
+      people: data ?? [],
+      isLoading: isPending,
+      isFetching,
+      error,
+      updatedAt: dataUpdatedAt || null,
+      refresh: () => void refetch(),
     }),
-    [source.label, query],
+    [source.label, data, isPending, isFetching, error, dataUpdatedAt, refetch],
   );
 
   return <PeopleContext.Provider value={value}>{children}</PeopleContext.Provider>;

@@ -1,9 +1,8 @@
-import { personField } from "../core/occupancy/extra-fields";
 import {
-  COMPANY_KEYS,
-  CONTRACT_KEYS,
-  ROLE_KEYS,
-  SPECIALTY_KEYS,
+  readCompany,
+  readContract,
+  readRole,
+  readSpecialty,
 } from "../core/occupancy/person-fields";
 import type { Person } from "../core/occupancy/types";
 import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
@@ -12,10 +11,13 @@ import { RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names"
  * Columnas de la tabla de personas.
  *
  * Mínimas a propósito: los campos que cualquier sistema de detección ya tiene.
- * Para mostrar más, pongan el valor en `Person.extra` desde su PeopleSource y
- * agreguen una entrada acá. No hay que tocar nada más.
+ * Los campos tipados de `Person` (cargo, especialidad, empresa, contrato) se
+ * leen con sus lectores; cualquier otra columna del API se conserva en
+ * `Person.extra` con el nombre declarado en `PEOPLE_FIELD_MAP.extra` y se lee
+ * con `extraField`. Para mostrar una más, agreguen una entrada acá y nada más:
  *
- *   { key: "gerencia", header: "Gerencia", value: (p) => text(p.extra?.gerencia) }
+ *   import { extraField } from "../core/occupancy/extra-fields";
+ *   { key: "gerencia", header: "Gerencia", value: (p) => extraField(p, "GERENCIA") ?? "—" }
  */
 
 /**
@@ -82,19 +84,6 @@ export function formatElapsed(iso: string, now: number): string {
   return `${hours} h ${String(minutes % 60).padStart(2, "0")}`;
 }
 
-/**
- * Las grafías aceptadas de cada campo viven en
- * [`src/core/occupancy/person-fields.ts`](../core/occupancy/person-fields.ts),
- * porque también las usan los filtros del plano. Se reexportan acá para que
- * quien agregue una columna las tenga a mano sin cambiar de import.
- */
-export {
-  COMPANY_KEYS,
-  CONTRACT_KEYS,
-  ROLE_KEYS,
-  SPECIALTY_KEYS,
-} from "../core/occupancy/person-fields";
-
 /** Marca de campo ausente. Una celda vacía se lee como un fallo de la tabla. */
 const MISSING = "—";
 
@@ -103,24 +92,24 @@ export const PERSON_COLUMNS: PersonColumn[] = [
   {
     key: "cargo",
     header: "Cargo",
-    value: (p) => personField(p, ROLE_KEYS) ?? MISSING,
+    value: (p) => readRole(p) ?? MISSING,
     secondary: true,
   },
   {
     key: "especialidad",
     header: "Especialidad",
-    value: (p) => personField(p, SPECIALTY_KEYS) ?? MISSING,
+    value: (p) => readSpecialty(p) ?? MISSING,
     secondary: true,
   },
   {
     key: "empresa",
     header: "Empresa",
-    value: (p) => personField(p, COMPANY_KEYS) ?? MISSING,
+    value: (p) => readCompany(p) ?? MISSING,
   },
   {
     key: "contrato",
     header: "Contrato",
-    value: (p) => personField(p, CONTRACT_KEYS) ?? MISSING,
+    value: (p) => readContract(p) ?? MISSING,
     variant: "mono",
     width: "7.5rem",
   },

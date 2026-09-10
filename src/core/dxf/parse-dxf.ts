@@ -120,6 +120,11 @@ function polylinePoints(vertices: any[], closed: boolean): Vec2[] {
  * Convert one raw entity into zero or more normalized primitives.
  * INSERT recurses into its block definition.
  */
+/** A finite number from the raw entity, or the fallback. dxf-parser passes garbage through. */
+function finite(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 function normalize(
   entity: RawEntity,
   blocks: Record<string, any>,
@@ -127,8 +132,9 @@ function normalize(
   layerOverride: string | null,
   depth: number,
   out: Primitive[],
+  baseLayer: string,
 ): void {
-  const layer = layerOverride ?? entity.layer ?? BASE_LAYER;
+  const layer = layerOverride ?? entity.layer ?? baseLayer;
   const map = (pts: Vec2[]) => (isIdentity(transform) ? pts : pts.map((p) => apply(transform, p)));
   const emitPath = (pts: Vec2[], closed: boolean) => {
     if (pts.length >= 2) out.push({ kind: "path", layer, points: map(pts), closed });
@@ -153,7 +159,10 @@ function normalize(
     case "ARC": {
       const c = vec(entity.center);
       if (!c || !Number.isFinite(entity.radius)) return;
-      emitPath(flattenArc(c, entity.radius, entity.startAngle ?? 0, entity.endAngle ?? 0), false);
+      emitPath(
+        flattenArc(c, entity.radius, finite(entity.startAngle, 0), finite(entity.endAngle, 0)),
+        false,
+      );
       return;
     }
 
@@ -165,9 +174,9 @@ function normalize(
         flattenEllipse(
           c,
           major,
-          entity.axisRatio ?? 1,
-          entity.startAngle ?? 0,
-          entity.endAngle ?? Math.PI * 2,
+          finite(entity.axisRatio, 1),
+          finite(entity.startAngle, 0),
+          finite(entity.endAngle, Math.PI * 2),
         ),
         false,
       );
@@ -283,9 +292,9 @@ function normalize(
       }
 
       for (const child of block.entities) {
-        // Block children on layer "0" inherit the INSERT's layer, per the spec.
-        const childLayer = !child.layer || child.layer === "0" ? layer : child.layer;
-        normalize(child, blocks, composed, childLayer, depth + 1, out);
+        // Block children on the base layer inherit the INSERT's layer, per the spec.
+        const childLayer = !child.layer || child.layer === baseLayer ? layer : child.layer;
+        normalize(child, blocks, composed, childLayer, depth + 1, out, baseLayer);
       }
       return;
     }
@@ -396,7 +405,7 @@ export function parseDxf(source: string, options: ParseOptions = {}): DxfDocumen
   const blocks = (parsed.blocks ?? {}) as Record<string, any>;
   const primitives: Primitive[] = [];
   for (const entity of parsed.entities ?? []) {
-    normalize(entity, blocks, IDENTITY, null, 0, primitives);
+    normalize(entity, blocks, IDENTITY, null, 0, primitives, baseLayer);
   }
 
   const base: Primitive[] = [];
@@ -428,9 +437,13 @@ export function parseDxf(source: string, options: ParseOptions = {}): DxfDocumen
   };
 }
 
-/** Fetch + parse in one step. */
-export async function loadDxf(url: string, options?: ParseOptions): Promise<DxfDocument> {
-  const res = await fetch(url);
+/** Fetch + parse in one step. `signal` cancels the download when the plan changes. */
+export async function loadDxf(
+  url: string,
+  options?: ParseOptions,
+  signal?: AbortSignal,
+): Promise<DxfDocument> {
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`No se pudo descargar ${url} (HTTP ${res.status})`);
   return parseDxf(await res.text(), options);
 }

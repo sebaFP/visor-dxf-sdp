@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { DxfDocument } from "../core/dxf/types";
 import { formatZoneIds } from "../core/dxf/zones";
 import { compareZoneIds } from "../core/occupancy/aggregate";
@@ -24,6 +25,8 @@ export interface SidebarProps {
    * el sistema dejó de detectar gente. `null` cuando no hay filtro puesto.
    */
   totalUnfiltered?: number | null;
+  /** Rótulo del total. Por defecto «Total detectadas». */
+  totalLabel?: string;
 }
 
 export function Sidebar({
@@ -33,12 +36,18 @@ export function Sidebar({
   onSelect,
   zoneLabel = RAW_ZONE_LABEL,
   totalUnfiltered = null,
+  totalLabel = "Total detectadas",
 }: SidebarProps) {
-  const layers = [...doc.zoneLayers].sort((a, b) => {
-    const ca = occupancy.byLayer.get(a.layer)?.count ?? 0;
-    const cb = occupancy.byLayer.get(b.layer)?.count ?? 0;
-    return cb - ca || compareZoneIds(a.layer, b.layer);
-  });
+  // Más gente primero. Solo cambia con los datos, no con cada hover del plano.
+  const layers = useMemo(
+    () =>
+      [...doc.zoneLayers].sort((a, b) => {
+        const ca = occupancy.byLayer.get(a.layer)?.count ?? 0;
+        const cb = occupancy.byLayer.get(b.layer)?.count ?? 0;
+        return cb - ca || compareZoneIds(a.layer, b.layer);
+      }),
+    [doc, occupancy],
+  );
 
   const offPlanShare =
     occupancy.total > 0 ? Math.round((occupancy.other.count / occupancy.total) * 100) : 0;
@@ -47,7 +56,7 @@ export function Sidebar({
     <div className="flex min-h-0 flex-col overflow-y-auto overscroll-contain">
       <div className="grid shrink-0 grid-cols-2 border-b border-line">
         <Stat
-          label="Total detectadas Interior Mina"
+          label={totalLabel}
           value={occupancy.total}
           hint={totalUnfiltered != null ? `de ${totalUnfiltered}` : undefined}
         />
@@ -89,7 +98,7 @@ export function Sidebar({
           const count = occupancy.byLayer.get(zl.layer)?.count ?? 0;
           const active = selection?.kind === "layer" && selection.layer === zl.layer;
           const share = occupancy.maxLayerCount > 0 ? count / occupancy.maxLayerCount : 0;
-          const accent = count === 0 ? "#3d4a58" : rampColor(DARK_THEME.densityRamp, share);
+          const accent = count === 0 ? DARK_THEME.emptyAccent : rampColor(DARK_THEME.densityRamp, share);
 
           // Lo que se lee es el nombre de la zona. La segunda línea solo
           // aparece cuando agrega algo: la capa cuando agrupa varias zonas, o

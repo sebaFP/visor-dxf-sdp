@@ -1,64 +1,17 @@
-import { personField } from "./extra-fields";
+import { textValue } from "./extra-fields";
 import type { Person } from "./types";
 
 /**
- * Grafías aceptadas para los campos de persona que el visor usa por nombre.
+ * Lectores de los campos tipados de `Person`. `null` cuando la fila no trae el
+ * campo o viene en blanco — la celda muestra «—» y el desplegable lo omite.
  *
- * No es paranoia: el mismo dato viaja con nombre distinto según de dónde salga.
- * En el sistema de referencia, el maestro de personas los llama `empresa` y
- * `nrocontrato`, la sábana de turnos `empresa` y `contrato`, y los endpoints de
- * ubicación emiten además `EMPRESA` y `CONTRATO` en mayúsculas. Se comparan
- * normalizadas (sin mayúsculas, separadores ni acentos), así que `NRO_CONTRATO`
- * y `nroContrato` son la misma clave.
- *
- * Vive en `core` y no junto a la tabla porque lo leen dos cosas: las columnas
- * (`src/ui/person-columns.ts`) y los filtros (`people-filters.ts`). Un campo
- * declarado dos veces se desincroniza a la primera grafía nueva.
+ * Qué columna alimenta cada campo se decide en el field map
+ * (`field-map.ts`, y `PEOPLE_FIELD_MAP` en `src/data/source.ts`). Acá no hay
+ * nombres de columna a propósito: los leen las columnas de la tabla
+ * (`src/ui/person-columns.ts`), los filtros (`people-filters.ts`) y los
+ * recorridos, y todos ven lo mismo.
  */
-
-export const COMPANY_KEYS = new Set([
-  "empresa",
-  "nombreempresa",
-  "empresanombre",
-  "razonsocial",
-  "company",
-]);
-
-export const CONTRACT_KEYS = new Set([
-  "contrato",
-  "nrocontrato",
-  "ncontrato",
-  "numerocontrato",
-  "contratonumero",
-  "idcontrato",
-  "contract",
-  "contractnumber",
-]);
-
-export const ROLE_KEYS = new Set([
-  "cargo",
-  "nombrecargo",
-  "cargonombre",
-  "descripcioncargo",
-  "cargodescripcion",
-  "puesto",
-  "role",
-  "position",
-]);
-
-export const SPECIALTY_KEYS = new Set([
-  "especialidad",
-  "nombreespecialidad",
-  "especialidadnombre",
-  "descripcionespecialidad",
-  "especialidaddescripcion",
-  "disciplina",
-  "specialty",
-  "speciality",
-]);
-
-/** Atajos legibles. `null` cuando la persona no trae el campo. */
-export const readCompany = (person: Person) => personField(person, COMPANY_KEYS);
-export const readContract = (person: Person) => personField(person, CONTRACT_KEYS);
-export const readRole = (person: Person) => personField(person, ROLE_KEYS);
-export const readSpecialty = (person: Person) => personField(person, SPECIALTY_KEYS);
+export const readCompany = (person: Person): string | null => textValue(person.company);
+export const readContract = (person: Person): string | null => textValue(person.contract);
+export const readRole = (person: Person): string | null => textValue(person.role);
+export const readSpecialty = (person: Person): string | null => textValue(person.specialty);

@@ -8,3 +8,6 @@ tsconfig.tsbuildinfo
 
 # Herramientas locales, no del proyecto.
 .atl
+
+# Configuración local (URL del API, etc.). Ver .env.example.
+.env

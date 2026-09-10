@@ -4,9 +4,9 @@ import type { Person } from "./types";
 /**
  * ── FILTROS DE PERSONAS ───────────────────────────────────────────────────────
  *
- * Empresa y contrato. Filtran el conjunto de personas *antes* de agregarlo por
- * zona, así que el plano, los conteos del panel y la tabla del modal miran
- * todos lo mismo.
+ * Empresa y contrato por defecto. Filtran el conjunto de personas *antes* de
+ * agregarlo por zona, así que el plano, los conteos del panel y la tabla del
+ * modal miran todos lo mismo.
  *
  * Son en cascada, en el orden declarado: las opciones de un filtro salen de las
  * personas que ya pasaron los anteriores. Con nada puesto, «Empresa» lista las
@@ -14,15 +14,23 @@ import type { Person } from "./types";
  * de esa empresa. Sin la cascada el segundo desplegable ofrecería contratos que
  * no dan ninguna fila.
  *
+ * La lista es un parámetro: todas las funciones reciben `defs` y caen a
+ * `PEOPLE_FILTERS` si no se pasa. Para otros filtros, pásenle los suyos al
+ * visor (`<PlanOccupancyViewer filters={[...]} />`):
+ *
+ *   { key: "gerencia", label: "Gerencia", allLabel: "Todas",
+ *     read: (p) => extraField(p, "GERENCIA") }
+ *
  * Los otros dos desplegables de la barra —proyecto y sector— no filtran gente:
  * eligen qué DXF se carga. Viven en `src/core/dxf/plan-catalog.ts`.
  *
  * Puro y sin React.
  */
 
-export type PeopleFilterKey = "empresa" | "contrato";
+export type PeopleFilterKey = string;
 
 export interface PeopleFilterDef {
+  /** Identidad del filtro. Libre; es la clave en `PeopleFilterState`. */
   key: PeopleFilterKey;
   /** Rótulo del control. */
   label: string;
@@ -39,9 +47,9 @@ export const PEOPLE_FILTERS: readonly PeopleFilterDef[] = [
 ];
 
 /** Qué está elegido. Ausente o `""` significa «sin filtrar por este campo». */
-export type PeopleFilterState = Partial<Record<PeopleFilterKey, string>>;
+export type PeopleFilterState = Readonly<Partial<Record<PeopleFilterKey, string>>>;
 
-export const NO_FILTERS: PeopleFilterState = {};
+export const NO_FILTERS: PeopleFilterState = Object.freeze({});
 
 /** Lo que la barra necesita para dibujar un desplegable. */
 export interface PeopleFilterOption extends PeopleFilterDef {
@@ -51,13 +59,20 @@ export interface PeopleFilterOption extends PeopleFilterDef {
   options: string[];
 }
 
-export function hasActiveFilters(state: PeopleFilterState): boolean {
-  return PEOPLE_FILTERS.some((def) => (state[def.key] ?? "") !== "");
+export function hasActiveFilters(
+  state: PeopleFilterState,
+  defs: readonly PeopleFilterDef[] = PEOPLE_FILTERS,
+): boolean {
+  return defs.some((def) => (state[def.key] ?? "") !== "");
 }
 
 /** ¿Esta persona pasa todos los filtros puestos? */
-export function matchesFilters(person: Person, state: PeopleFilterState): boolean {
-  return PEOPLE_FILTERS.every((def) => {
+export function matchesFilters(
+  person: Person,
+  state: PeopleFilterState,
+  defs: readonly PeopleFilterDef[] = PEOPLE_FILTERS,
+): boolean {
+  return defs.every((def) => {
     const wanted = state[def.key] ?? "";
     return wanted === "" || def.read(person) === wanted;
   });
@@ -67,25 +82,31 @@ export function matchesFilters(person: Person, state: PeopleFilterState): boolea
 export function filterPeople(
   people: readonly Person[],
   state: PeopleFilterState,
-): Person[] {
-  if (!hasActiveFilters(state)) return people as Person[];
-  return people.filter((person) => matchesFilters(person, state));
+  defs: readonly PeopleFilterDef[] = PEOPLE_FILTERS,
+): readonly Person[] {
+  if (!hasActiveFilters(state, defs)) return people;
+  return people.filter((person) => matchesFilters(person, state, defs));
 }
 
 /**
  * Elegir un valor en un filtro invalida los de abajo: cambiar de empresa deja
  * el contrato anterior sin sentido, y dejarlo puesto daría cero filas sin que
  * se vea por qué. Se limpian los posteriores y se conservan los anteriores.
+ *
+ * Una clave que no está en `defs` no cambia nada.
  */
 export function setFilter(
   state: PeopleFilterState,
   key: PeopleFilterKey,
   value: string,
+  defs: readonly PeopleFilterDef[] = PEOPLE_FILTERS,
 ): PeopleFilterState {
-  const index = PEOPLE_FILTERS.findIndex((def) => def.key === key);
-  const next: PeopleFilterState = {};
-  for (let i = 0; i < PEOPLE_FILTERS.length; i++) {
-    const def = PEOPLE_FILTERS[i];
+  const index = defs.findIndex((def) => def.key === key);
+  if (index === -1) return state;
+
+  const next: Partial<Record<PeopleFilterKey, string>> = {};
+  for (let i = 0; i < defs.length; i++) {
+    const def = defs[i];
     if (i < index) {
       const kept = state[def.key] ?? "";
       if (kept !== "") next[def.key] = kept;
@@ -111,11 +132,12 @@ function compareValues(a: string, b: string): number {
 export function buildFilterOptions(
   people: readonly Person[],
   state: PeopleFilterState,
+  defs: readonly PeopleFilterDef[] = PEOPLE_FILTERS,
 ): PeopleFilterOption[] {
   let scope: readonly Person[] = people;
   const out: PeopleFilterOption[] = [];
 
-  for (const def of PEOPLE_FILTERS) {
+  for (const def of defs) {
     const values = new Set<string>();
     for (const person of scope) {
       const value = def.read(person);

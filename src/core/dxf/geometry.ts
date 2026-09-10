@@ -37,6 +37,18 @@ export function containsPoint(b: Bounds, p: Vec2): boolean {
   return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY;
 }
 
+/**
+ * Counter-clockwise sweep in (0, 2π]. A DXF with garbage angles (NaN, ±∞)
+ * would otherwise spin the `while` below forever; those curves are dropped.
+ */
+function normalizeSweep(sweep: number): number | null {
+  if (!Number.isFinite(sweep)) return null;
+  const full = Math.PI * 2;
+  sweep %= full;
+  if (sweep <= 0) sweep += full;
+  return sweep;
+}
+
 /** How many segments to use when flattening a curve of the given radius/sweep. */
 function arcSegments(sweepRad: number): number {
   return Math.max(2, Math.min(96, Math.ceil(Math.abs(sweepRad) / 0.12)));
@@ -49,8 +61,8 @@ export function flattenArc(
   startRad: number,
   endRad: number,
 ): Vec2[] {
-  let sweep = endRad - startRad;
-  while (sweep <= 0) sweep += Math.PI * 2;
+  const sweep = normalizeSweep(endRad - startRad);
+  if (sweep === null) return [];
   const n = arcSegments(sweep);
   const out: Vec2[] = [];
   for (let i = 0; i <= n; i++) {
@@ -110,9 +122,8 @@ export function flattenEllipse(
   const cos = Math.cos(rot);
   const sin = Math.sin(rot);
 
-  let sweep = endRad - startRad;
-  if (Math.abs(sweep) < 1e-9) sweep = Math.PI * 2;
-  while (sweep <= 0) sweep += Math.PI * 2;
+  const sweep = normalizeSweep(Math.abs(endRad - startRad) < 1e-9 ? Math.PI * 2 : endRad - startRad);
+  if (sweep === null) return [];
 
   const n = arcSegments(sweep);
   const out: Vec2[] = [];

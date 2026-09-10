@@ -72,8 +72,13 @@ export function aggregateOccupancy(
   };
 }
 
+/**
+ * `detectedAt` es ISO UTC con forma uniforme (lo garantiza `mapRowsToPeople`),
+ * así que comparar strings es comparar instantes, y mucho más barato que
+ * `localeCompare`.
+ */
 function byDetectedAtDesc(a: Person, b: Person): number {
-  return b.detectedAt.localeCompare(a.detectedAt);
+  return a.detectedAt < b.detectedAt ? 1 : a.detectedAt > b.detectedAt ? -1 : 0;
 }
 
 /** Numeric-aware sort so "9" comes before "85", not after. */

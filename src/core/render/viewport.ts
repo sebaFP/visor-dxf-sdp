@@ -23,11 +23,23 @@ export function fitBounds(
   height: number,
   padding = 32,
 ): Viewport {
+  // Bounds vacíos o infinitos (un DXF sin geometría) darían NaN, y un NaN en
+  // la cámara no se recupera nunca: cada pan/zoom lo arrastra.
+  if (
+    !Number.isFinite(bounds.minX) ||
+    !Number.isFinite(bounds.minY) ||
+    !Number.isFinite(bounds.maxX) ||
+    !Number.isFinite(bounds.maxY)
+  ) {
+    return { scale: 1, tx: width / 2, ty: height / 2 };
+  }
   const w = Math.max(1e-6, bounds.maxX - bounds.minX);
   const h = Math.max(1e-6, bounds.maxY - bounds.minY);
-  const scale = clampScale(
-    Math.min((width - padding * 2) / w, (height - padding * 2) / h),
-  );
+  // Con un lienzo más chico que el margen se encuadra sin margen: mejor un
+  // plano apretado que uno colapsado a un punto.
+  const innerW = width - padding * 2 > 0 ? width - padding * 2 : Math.max(1, width);
+  const innerH = height - padding * 2 > 0 ? height - padding * 2 : Math.max(1, height);
+  const scale = clampScale(Math.min(innerW / w, innerH / h));
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
   return { scale, tx: width / 2 - cx * scale, ty: height / 2 + cy * scale };

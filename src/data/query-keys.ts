@@ -8,5 +8,6 @@
  */
 export const queryKeys = {
   plan: (url: string) => ["plan", url] as const,
+  plans: (url: string) => ["plans", url] as const,
   people: (sourceId: string) => ["people", sourceId] as const,
 };

@@ -8,19 +8,26 @@ Este repo es una **base de referencia para integrar**, no un producto cerrado.
 La lógica que importa vive en `src/core` y no depende de React.
 
 ```bash
-npm install
-npm run dev      # http://localhost:5173
+pnpm install     # o npm install
+pnpm dev         # http://localhost:5173
 ```
 
 Arranca con datos de ejemplo generados en el navegador. Para conectar el sistema
-real se reemplaza **un componente**: el proveedor que envuelve al visor.
-Ver [INTEGRACION.md](INTEGRACION.md).
+real hacen falta dos cosas, y están explicadas paso a paso en
+[INTEGRACION.md](INTEGRACION.md):
+
+1. `.env` → `VITE_PEOPLE_API_URL`: el endpoint que devuelve las filas de la
+   vista de detección en JSON.
+2. `src/data/source.ts` → `PEOPLE_FIELD_MAP`: qué columna alimenta cada campo.
+   Si les renombran una columna, se cambia un string.
 
 ```tsx
+const fuente = createApiPeopleSource({ url: PEOPLE_API_URL, fieldMap: PEOPLE_FIELD_MAP });
+
 <QueryClientProvider client={queryClient}>
-  <SamplePeopleProvider planUrl="/plano.dxf">   {/* ← esto se reemplaza */}
-    <PlanOccupancyViewer planUrl="/plano.dxf" />
-  </SamplePeopleProvider>
+  <PeopleProvider source={fuente} sourceId="api">
+    <PlanOccupancyViewer planUrl="/plano.dxf" plans={PROJECTS} />
+  </PeopleProvider>
 </QueryClientProvider>
 ```
 
@@ -38,10 +45,15 @@ dónde salen las personas: las lee del contexto que le da el proveedor.
 - Muestra cada zona por su **nombre**, no por su id: usa la descripción, o el
   nombre si no hay descripción, o el id si no hay ninguno de los dos.
 - **Barra de arriba** con cuatro desplegables, que hacen dos cosas distintas:
-  **proyecto** y **sector** eligen qué DXF se carga; **empresa** y **contrato**
-  filtran las personas antes de repartirlas por zona, así que el plano, los
-  conteos y la tabla miran siempre el mismo subconjunto. Cada par es su propia
-  cascada: el sector depende del proyecto, el contrato depende de la empresa.
+  **proyecto** y **sector** eligen qué DXF se carga (de un catálogo JSON:
+  proyectos, cada uno con su plano y sus sectores con el suyo); **empresa** y
+  **contrato** filtran las personas antes de repartirlas por zona, así que el
+  plano, los conteos y la tabla miran siempre el mismo subconjunto. Cada par es
+  su propia cascada: el sector depende del proyecto, el contrato depende de la
+  empresa.
+- **Insignias que se agrupan**: al alejar el zoom, las que se amontonan se
+  funden en una sola con la suma de personas; nadie deja de contarse. Clic en
+  una agrupada acerca la cámara hasta que se separan.
 - Clic en una zona (en el plano o en la lista lateral) → modal con la tabla de
   personas, filtrable por columna, con el recuento «N de M» arriba a la derecha.
   La tabla es reemplazable por la suya.
@@ -85,22 +97,29 @@ src/
       plan-catalog.ts       Proyecto/sector → qué DXF se carga
     occupancy/
       types.ts              Person, PeopleSource — EL CONTRATO con su sistema
+      field-map.ts          Columnas del API → Person (field map, dedupe, fechas)
       aggregate.ts          personas[] → conteo por capa + "otras zonas"
       zone-names.ts         id de zona → descripción / nombre / id
-      extra-fields.ts       Lectura tolerante de Person.extra (grafías)
-      person-fields.ts      Qué claves son empresa, contrato, cargo, especialidad
-      people-filters.ts     Empresa y contrato en cascada, sin React
+      extra-fields.ts       normalizeKey, textValue, extraField(person, "COL")
+      person-fields.ts      readCompany / readContract / readRole / readSpecialty
+      people-filters.ts     Filtros en cascada (empresa, contrato…), sin React
     render/
       viewport.ts           Matemática de pan/zoom (world ↔ screen)
       theme.ts              Todos los colores
       plan-renderer.ts      Renderer Canvas 2D + hit-testing
-  data/                     ← React Query. La capa que se reemplaza al integrar.
+      badge-clusters.ts     Agrupación de insignias al alejar el zoom
+      perspective.ts        Motor de los recorridos (raycast, colisiones)
+      placement.ts          Personas → puntos del mundo (recorridos)
+      sprites.ts            Pixel art de los recorridos
+  data/                     ← React Query. La capa que se configura al integrar.
+    source.ts               ← LO QUE SE EDITA: URLs, PEOPLE_FIELD_MAP, PROJECTS
+    api-people-source.ts    PeopleSource real: fetch + mapRowsToPeople
     query-keys.ts           Claves centralizadas (permiten compartir caché)
     use-plan-query.ts       Descarga + parseo del DXF, una vez por URL
+    use-plans-query.ts      Descarga del catálogo de proyectos (VITE_PLANS_URL)
     people-context.tsx      PeopleProvider genérico + hook usePeople()
     sample-people-provider.tsx  ← ANDAMIO: envuelve al visor con datos falsos
-    mock-people-source.ts   Generador de datos de ejemplo (borrable)
-    source.ts               URL del plano e intervalo de refresco
+    mock-people-source.ts   Filas de ejemplo con la forma de la vista (borrable)
   ui/                       ← React. Reemplazable por completo.
     PlanOccupancyViewer.tsx ← EL COMPONENTE que montan en su app
     PlanCanvas.tsx          Canvas + insignias HTML + panel de cámara
@@ -110,6 +129,9 @@ src/
     PeopleTable.tsx         Tabla por defecto + el contrato para reemplazarla
     person-columns.ts       Columnas de la tabla (agregar campos acá)
     use-fullscreen.ts       Pantalla completa sobre la raíz del componente
+    PerspectiveView.tsx     Recorrido en primera persona (modo oculto)
+    OverheadView.tsx        Recorrido cenital por rondas (modo oculto)
+    mode-hud.tsx            HUD común de los recorridos
 ```
 
 Regla que se respeta en todo el repo: **`src/core` no importa nada de `src/ui`**.
@@ -147,6 +169,19 @@ se borra sin tocar el visor: se cambia un componente por el suyo y listo. El
 proveedor de ejemplo lee el plano con la misma query que el visor, así que los
 13 MB se descargan y parsean una sola vez pese a tener dos consumidores.
 
+**El contrato con los datos es un field map, no un adaptador escrito a mano.**
+`Person` tiene campos tipados (`company`, `contract`, `role`, `specialty`,
+`zoneName`, `zoneDescription`) y `mapRowsToPeople` los llena desde las filas
+del API según `PEOPLE_FIELD_MAP`. Renombrar una columna es cambiar un string;
+los datos de ejemplo pasan por el mismo adaptador, así que se prueba en cada
+refresco. El adaptador además deduplica (la vista real es un log de lecturas,
+no una foto), cae a `TAGID` cuando `RUT` viene nulo y normaliza las fechas a
+ISO UTC para que ordenar sea comparar strings.
+
+**Los recorridos están ocultos a propósito.** Se abren con una secuencia de
+teclas y se cargan en chunks aparte; INTEGRACION.md §8 explica cómo activarlos
+y cómo quitarlos.
+
 **El parseo es síncrono** (~200 ms para 13 MB). No toca el DOM, así que si les
 molesta el bloqueo, `parseDxf` se puede mover a un Web Worker sin cambios.
 
@@ -167,8 +202,8 @@ Cosas que cuestan encontrar cuando uno parte de cero, y que ya vienen manejadas:
 - **Texto ilegible**: se descarta bajo 6 px en pantalla, y se recorta por
   viewport. Sin esto, alejar el zoom cuesta cientos de ms por frame.
 - **Insignias superpuestas**: el plano son 4 niveles apilados verticalmente, así
-  que alejado se amontonan. Gana la zona con más gente; el resto aparece al
-  acercar.
+  que alejado se amontonan. Las que se taparían se funden en una insignia
+  agrupada que suma personas distintas; al acercar se separan solas.
 - **Una capa puede tener anillos en niveles distintos.** En `plano.dxf`, las
   capas `15-212` y `186` tienen anillos separados ~2.700 unidades en Y, o sea en
   dos niveles distintos de la mina. Por eso la cámara enfoca el anillo más
@@ -178,17 +213,27 @@ Cosas que cuestan encontrar cuando uno parte de cero, y que ya vienen manejadas:
 
 ## Cómo cambiar el plano
 
-Reemplazar `public/plano.dxf`, o cambiar `PLAN_URL` en `src/data/source.ts`.
+Reemplazar `public/plano.dxf`, cambiar `PLAN_URL` en `src/data/source.ts`, o
+declarar varios en el catálogo de proyectos (`PROJECTS` o `VITE_PLANS_URL`).
 No hay nada específico de este plano en el código.
+
+## Variables de entorno
+
+Copiar `.env.example` a `.env` (no se versiona):
+
+| Variable              | Qué hace                                                        |
+| --------------------- | --------------------------------------------------------------- |
+| `VITE_PEOPLE_API_URL` | Endpoint con las filas de personas en JSON. Vacío → datos de ejemplo. |
+| `VITE_PLANS_URL`      | Endpoint con el catálogo de proyectos/sectores/planos. Vacío → `PROJECTS`. |
 
 ## Scripts
 
-| Comando             | Qué hace                        |
-| ------------------- | ------------------------------- |
-| `npm run dev`       | Servidor de desarrollo          |
-| `npm run build`     | Typecheck + build de producción |
-| `npm run typecheck` | Solo `tsc --noEmit`             |
-| `npm run preview`   | Sirve el build                  |
+| Comando          | Qué hace                        |
+| ---------------- | ------------------------------- |
+| `pnpm dev`       | Servidor de desarrollo          |
+| `pnpm build`     | Typecheck + build de producción |
+| `pnpm typecheck` | Solo `tsc --noEmit`             |
+| `pnpm preview`   | Sirve el build                  |
 
 ## Dependencias
 
@@ -196,5 +241,6 @@ No hay nada específico de este plano en el código.
 para los estilos de la carpeta `ui`. Nada más — a propósito.
 
 La tipografía (IBM Plex Sans/Mono) entra por un `<link>` a Google Fonts en
-`index.html`: una línea, bórrenla si usan otra familia. Todos los colores y
-fuentes son tokens en `src/index.css`.
+`index.html`: una línea, bórrenla si usan otra familia o si el visor corre sin
+salida a internet — el CSS ya cae a `system-ui`. Todos los colores y fuentes
+son tokens en `src/index.css`.

@@ -1,0 +1,5 @@
+# Todo el texto se guarda con LF; en Windows el editor lo lee igual.
+* text=auto eol=lf
+
+# El plano viene de AutoCAD con CRLF y pesa 13 MB: se guarda tal cual.
+*.dxf -text

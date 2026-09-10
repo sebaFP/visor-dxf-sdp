@@ -40,13 +40,24 @@ export interface RenderState {
   /** Per-layer styling. Layers missing from the map are drawn as empty. */
   zoneStyles: Map<string, ZoneStyle>;
   showBaseText: boolean;
+  /**
+   * Device pixel ratio the canvas backing store was sized with. Pass the same
+   * value you used for `canvas.width`; defaults to the live window value.
+   */
+  dpr?: number;
+}
+
+interface BakedRing {
+  points: Vec2[];
+  /** Real polygon area (×2, absolute), for the hit-test tie-break. */
+  area: number;
 }
 
 interface BakedZone {
   layer: string;
   path: Path2D;
   bounds: Bounds;
-  rings: Vec2[][];
+  rings: BakedRing[];
 }
 
 /**
@@ -78,14 +89,15 @@ export class PlanRenderer {
         layer: zl.layer,
         path,
         bounds: zl.bounds,
-        rings: zl.rings.map((r) => r.points),
+        rings: zl.rings.map((r) => ({ points: r.points, area: r.area })),
       };
     });
   }
 
   render(ctx: CanvasRenderingContext2D, state: RenderState): void {
     const { viewport: vp, width, height } = state;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = state.dpr ?? (window.devicePixelRatio || 1);
+    const view = visibleBounds(vp, width, height);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = this.theme.background;
@@ -100,16 +112,15 @@ export class PlanRenderer {
     ctx.lineWidth = BASE_LINE_PX / vp.scale;
     ctx.stroke(this.baseGeometry);
 
-    this.drawZones(ctx, state);
+    this.drawZones(ctx, state, view);
 
     // Text is drawn back in screen space so glyphs are not mirrored by the flip.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (state.showBaseText) this.drawBaseText(ctx, state);
+    if (state.showBaseText) this.drawBaseText(ctx, state, view);
   }
 
-  private drawZones(ctx: CanvasRenderingContext2D, state: RenderState): void {
+  private drawZones(ctx: CanvasRenderingContext2D, state: RenderState, view: Bounds): void {
     const { viewport: vp } = state;
-    const view = visibleBounds(vp, state.width, state.height);
     const { theme } = this;
 
     // Selected/hovered zones stroke last so their outline is never overdrawn.
@@ -124,7 +135,7 @@ export class PlanRenderer {
       ctx.fillStyle =
         !style || style.empty
           ? theme.emptyFill
-          : rampColor(theme.densityRamp, style.intensity, 0.55);
+          : rampColor(theme.densityRamp, style.intensity, theme.zoneFillAlpha);
       ctx.fill(zone.path, "evenodd");
 
       if (style?.selected || style?.hovered) {
@@ -147,9 +158,8 @@ export class PlanRenderer {
     ctx.globalAlpha = 1;
   }
 
-  private drawBaseText(ctx: CanvasRenderingContext2D, state: RenderState): void {
+  private drawBaseText(ctx: CanvasRenderingContext2D, state: RenderState, view: Bounds): void {
     const { viewport: vp } = state;
-    const view = visibleBounds(vp, state.width, state.height);
 
     ctx.fillStyle = this.theme.baseText;
     ctx.textBaseline = "alphabetic";
@@ -175,7 +185,11 @@ export class PlanRenderer {
 
   /**
    * Topmost zone layer containing a world point, or null.
-   * Smallest-area-first so a zone nested inside another still wins the click.
+   *
+   * Smallest ring first so a zone nested inside another still wins the click.
+   * It is the area of the RING that contains the point, not of the layer's
+   * bounding box: a layer with rings on two levels ("15-212" in the sample
+   * plan) has a huge box and would otherwise lose every click to its neighbours.
    */
   hitTest(world: Vec2): string | null {
     let best: { layer: string; area: number } | null = null;
@@ -183,9 +197,8 @@ export class PlanRenderer {
     for (const zone of this.zones) {
       if (!containsPoint(zone.bounds, world)) continue;
       for (const ring of zone.rings) {
-        if (!pointInPolygon(world, ring)) continue;
-        const area = (zone.bounds.maxX - zone.bounds.minX) * (zone.bounds.maxY - zone.bounds.minY);
-        if (!best || area < best.area) best = { layer: zone.layer, area };
+        if (!pointInPolygon(world, ring.points)) continue;
+        if (!best || ring.area < best.area) best = { layer: zone.layer, area: ring.area };
         break;
       }
     }

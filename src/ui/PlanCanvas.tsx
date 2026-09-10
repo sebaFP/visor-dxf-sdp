@@ -6,6 +6,11 @@ import {
   RAW_ZONE_LABEL,
   type ZoneLabeller,
 } from "../core/occupancy/zone-names";
+import {
+  clusterBadges,
+  type BadgeCandidate,
+  type BadgeCluster,
+} from "../core/render/badge-clusters";
 import { PlanRenderer, type ZoneStyle } from "../core/render/plan-renderer";
 import { DARK_THEME, rampColor } from "../core/render/theme";
 import {
@@ -25,11 +30,12 @@ const ZOOM_STEP = 1.25;
 /** Step used by the buttons — coarser than the wheel so one click is felt. */
 const BUTTON_ZOOM_STEP = 1.6;
 /**
- * Minimum screen distance between two count badges. The sample plan stacks four
- * levels vertically, so zoomed out a dozen badges land on the same 40 px — the
- * busiest zone wins and the rest are hidden until you zoom in.
+ * Footprint of one count badge on screen (the widest label plus its stripe).
+ * Two badges closer than this in both axes would overlap, so they merge into
+ * one that adds up their people, and split again as you zoom in. See
+ * `core/render/badge-clusters.ts`.
  */
-const BADGE_MIN_DISTANCE = 44;
+const BADGE_FOOTPRINT = { width: 132, height: 48 };
 const CAMERA_MS = 320;
 /** Padding used when framing the whole drawing. Also the 1x of the zoom read-out. */
 const FIT_PADDING = 48;
@@ -71,14 +77,6 @@ export interface PlanCanvasProps {
   zoneLabel?: ZoneLabeller;
 }
 
-interface Badge {
-  layer: string;
-  zoneIds: string[];
-  count: number;
-  x: number;
-  y: number;
-}
-
 export function PlanCanvas({
   doc,
   occupancy,
@@ -96,9 +94,14 @@ export function PlanCanvas({
 
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [hoveredLayer, setHoveredLayer] = useState<string | null>(null);
+  /** Capas de la insignia agrupada bajo el cursor: se resaltan todas. */
+  const [hoveredCluster, setHoveredCluster] = useState<readonly string[] | null>(null);
   // Badges live in React state because they are HTML, not canvas — crisp text,
   // real hover/focus, and keyboard reachable for free.
-  const [badges, setBadges] = useState<Badge[]>([]);
+  const [badges, setBadges] = useState<BadgeCluster[]>([]);
+  // El DPR cambia al arrastrar la ventana a otro monitor o al hacer zoom en el
+  // navegador; el backing store del canvas tiene que seguirlo.
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
   /** Current scale as a multiple of "the whole plan fits on screen". */
   const [zoom, setZoom] = useState(1);
   const [mode, setMode] = useState<PlanMode | null>(null);
@@ -131,12 +134,12 @@ export function PlanCanvas({
         intensity: occupancy.maxLayerCount > 0 ? count / occupancy.maxLayerCount : 0,
         empty: count === 0,
         selected: zl.layer === selectedLayer,
-        hovered: zl.layer === hoveredLayer,
+        hovered: zl.layer === hoveredLayer || (hoveredCluster?.includes(zl.layer) ?? false),
         dimmed: highlightLayers !== null && !highlightLayers.has(zl.layer),
       });
     }
     return styles;
-  }, [doc, occupancy, selectedLayer, hoveredLayer, highlightLayers]);
+  }, [doc, occupancy, selectedLayer, hoveredLayer, hoveredCluster, highlightLayers]);
 
   const recomputeBadges = useCallback(() => {
     const vp = viewportRef.current;
@@ -147,7 +150,7 @@ export function PlanCanvas({
     // ya provoca un render por frame, así que no cuesta nada extra.
     if (fitViewport) setZoom(vp.scale / fitViewport.scale);
 
-    const candidates: Badge[] = [];
+    const candidates: BadgeCandidate[] = [];
     for (const zl of doc.zoneLayers) {
       const p = worldToScreen(vp, zl.labelPoint);
       // Keep a small margin so a badge half off-screen still shows.
@@ -159,25 +162,14 @@ export function PlanCanvas({
         count: bucket?.count ?? 0,
         x: p.x,
         y: p.y,
+        focus: zl.focusBounds,
+        people: bucket?.people ?? [],
       });
     }
 
-    // Busiest first, plus whatever is selected, so suppression never hides the
-    // zone the user is actually looking at.
-    candidates.sort((a, b) => {
-      if (a.layer === selectedLayer) return -1;
-      if (b.layer === selectedLayer) return 1;
-      return b.count - a.count;
-    });
-
-    const next: Badge[] = [];
-    for (const badge of candidates) {
-      const collides = next.some(
-        (placed) => Math.hypot(placed.x - badge.x, placed.y - badge.y) < BADGE_MIN_DISTANCE,
-      );
-      if (!collides) next.push(badge);
-    }
-    setBadges(next);
+    // Las que se amontonan se suman en una sola insignia; la seleccionada
+    // nunca se absorbe, así el grupo jamás esconde lo que el usuario mira.
+    setBadges(clusterBadges(candidates, BADGE_FOOTPRINT, selectedLayer));
   }, [doc, occupancy, size, selectedLayer, fitViewport]);
 
   const draw = useCallback(() => {
@@ -191,8 +183,9 @@ export function PlanCanvas({
       height: size.height,
       zoneStyles,
       showBaseText,
+      dpr,
     });
-  }, [renderer, size, zoneStyles, showBaseText]);
+  }, [renderer, size, zoneStyles, showBaseText, dpr]);
 
   // Animation loops outlive the render that started them, so they must read the
   // CURRENT draw/badge functions. Capturing them instead would repaint the frame
@@ -222,21 +215,33 @@ export function PlanCanvas({
     return () => observer.disconnect();
   }, []);
 
+  // Un media query que deja de coincidir en cuanto el DPR cambia; se vuelve a
+  // suscribir con el valor nuevo.
+  useEffect(() => {
+    const query = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    const onChange = () => setDpr(window.devicePixelRatio || 1);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, [dpr]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || size.width === 0) return;
-    const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(size.width * dpr);
     canvas.height = Math.round(size.height * dpr);
     canvas.style.width = `${size.width}px`;
     canvas.style.height = `${size.height}px`;
     scheduleDraw();
-  }, [size, scheduleDraw]);
+  }, [size, dpr, scheduleDraw]);
 
   /** Ease the camera to a target viewport instead of teleporting. */
+  const cameraFrameRef = useRef(0);
   const animateTo = useCallback((target: Viewport) => {
     const from = viewportRef.current;
     const start = performance.now();
+    // Una animación nueva reemplaza a la anterior: dos a la vez se pelearían
+    // por la cámara.
+    cancelAnimationFrame(cameraFrameRef.current);
     const step = () => {
       const t = Math.min(1, (performance.now() - start) / CAMERA_MS);
       // easeOutCubic
@@ -244,10 +249,33 @@ export function PlanCanvas({
       viewportRef.current = lerpViewport(from, target, eased);
       paintRef.current.draw();
       paintRef.current.recomputeBadges();
-      if (t < 1) requestAnimationFrame(step);
+      cameraFrameRef.current = t < 1 ? requestAnimationFrame(step) : 0;
     };
-    requestAnimationFrame(step);
+    cameraFrameRef.current = requestAnimationFrame(step);
   }, []);
+
+  // Nada debe seguir pintando un canvas que ya no existe. Los handles vuelven
+  // a 0: en StrictMode React desmonta y vuelve a montar, y un handle cancelado
+  // que quedara guardado haría creer a `scheduleDraw` que ya hay un frame
+  // pendiente — y no se pintaría nunca más.
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(frameRef.current);
+      cancelAnimationFrame(cameraFrameRef.current);
+      frameRef.current = 0;
+      cameraFrameRef.current = 0;
+    },
+    [],
+  );
+
+  /** Acercar hasta que las capas de una insignia agrupada se separen. */
+  const focusCluster = useCallback(
+    (cluster: BadgeCluster) => {
+      if (size.width === 0) return;
+      animateTo(focusBounds(cluster.focus, size.width, size.height));
+    },
+    [size, animateTo],
+  );
 
   const resetView = useCallback(() => {
     if (fitViewport) animateTo(fitViewport);
@@ -434,18 +462,46 @@ export function PlanCanvas({
       />
 
       <div className="pointer-events-none absolute inset-0">
-        {badges.map((badge) => (
-          <ZoneBadge
-            key={badge.layer}
-            badge={badge}
-            max={occupancy.maxLayerCount}
-            selected={badge.layer === selectedLayer}
-            dimmed={highlightLayers !== null && !highlightLayers.has(badge.layer)}
-            label={formatZoneLabels(badge.zoneIds, zoneLabel)}
-            onSelect={() => onSelectLayer(badge.layer === selectedLayer ? null : badge.layer)}
-            onHover={setHoveredLayer}
-          />
-        ))}
+        {badges.map((badge) => {
+          const grouped = badge.layers.length > 1;
+          const layer = badge.layers[0];
+          return (
+            <ZoneBadge
+              key={badge.key}
+              badge={badge}
+              max={occupancy.maxLayerCount}
+              selected={!grouped && layer === selectedLayer}
+              dimmed={
+                highlightLayers !== null && !badge.layers.some((l) => highlightLayers.has(l))
+              }
+              label={
+                grouped
+                  ? `${badge.layers.length} zonas agrupadas`
+                  : formatZoneLabels(badge.zoneIds, zoneLabel)
+              }
+              title={
+                grouped
+                  ? badge.layers
+                      .map((l) => {
+                        const zl = doc.zoneLayers.find((z) => z.layer === l);
+                        const n = occupancy.byLayer.get(l)?.count ?? 0;
+                        return `${zl ? formatZoneLabels(zl.zoneIds, zoneLabel) : l} — ${n}`;
+                      })
+                      .join("\n") + "\n(clic para acercar)"
+                  : `${formatZoneLabels(badge.zoneIds, zoneLabel)} — ${badge.count} persona(s) · capa ${layer}`
+              }
+              onSelect={() =>
+                grouped
+                  ? focusCluster(badge)
+                  : onSelectLayer(layer === selectedLayer ? null : layer)
+              }
+              onHover={(over) => {
+                if (grouped) setHoveredCluster(over ? badge.layers : null);
+                else setHoveredLayer(over ? layer : null);
+              }}
+            />
+          );
+        })}
       </div>
 
       {mode && (
@@ -580,35 +636,41 @@ function ZoneBadge({
   selected,
   dimmed,
   label,
+  title,
   onSelect,
   onHover,
 }: {
-  badge: Badge;
+  badge: BadgeCluster;
   max: number;
   selected: boolean;
   dimmed: boolean;
   label: string;
+  title: string;
   onSelect: () => void;
-  onHover: (layer: string | null) => void;
+  onHover: (over: boolean) => void;
 }) {
-  const intensity = max > 0 ? badge.count / max : 0;
+  const grouped = badge.layers.length > 1;
+  // Un grupo suma varias capas, así que puede superar el máximo por capa.
+  const intensity = max > 0 ? Math.min(1, badge.count / max) : 0;
   const empty = badge.count === 0;
-  const accent = empty ? "#3d4a58" : rampColor(DARK_THEME.densityRamp, intensity);
+  const accent = empty ? DARK_THEME.emptyAccent : rampColor(DARK_THEME.densityRamp, intensity);
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      onPointerEnter={() => onHover(badge.layer)}
-      onPointerLeave={() => onHover(null)}
+      onPointerEnter={() => onHover(true)}
+      onPointerLeave={() => onHover(false)}
       style={{
         left: badge.x,
         top: badge.y,
-        borderColor: selected ? "#f1f5f9" : accent,
+        borderColor: selected ? DARK_THEME.zoneStrokeSelected : accent,
         opacity: dimmed ? 0.2 : 1,
+        // Un grupo se distingue por el doble borde, como una pila de fichas.
+        boxShadow: grouped ? `0 0 0 2px ${DARK_THEME.background}, 0 0 0 3px ${accent}` : undefined,
       }}
       className="pointer-events-auto absolute flex -translate-x-1/2 -translate-y-1/2 items-stretch overflow-hidden rounded-sm border bg-abyss/90 backdrop-blur-[2px] transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal"
-      title={`${label} — ${badge.count} persona(s) · capa ${badge.layer}`}
+      title={title}
     >
       {/* Franja de color a la izquierda en vez de teñir el número: el conteo
           queda siempre legible y la densidad se lee igual de rápido. */}

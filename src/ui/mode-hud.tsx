@@ -1,7 +1,6 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Person } from "../core/occupancy/types";
-import { personField } from "../core/occupancy/extra-fields";
-import { COMPANY_KEYS, CONTRACT_KEYS } from "./person-columns";
+import { readCompany, readContract } from "../core/occupancy/person-fields";
 
 /**
  * Marcador compartido por los recorridos del plano.
@@ -49,7 +48,7 @@ export interface KillEntry {
 }
 
 export function companyOf(person: Person): string {
-  return personField(person, COMPANY_KEYS) ?? "SIN EMPRESA";
+  return readCompany(person) ?? "SIN EMPRESA";
 }
 
 /**
@@ -61,6 +60,16 @@ export function companyOf(person: Person): string {
 export function useKillFeed(): [KillEntry[], (person: Person) => void] {
   const [feed, setFeed] = useState<KillEntry[]>([]);
   const idRef = useRef(0);
+  // Los temporizadores de expiración se limpian al desmontar: sin esto seguían
+  // escribiendo estado sobre un componente que ya no existe.
+  const timersRef = useRef(new Set<number>());
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   const push = useCallback((person: Person) => {
     const id = ++idRef.current;
@@ -70,12 +79,14 @@ export function useKillFeed(): [KillEntry[], (person: Person) => void] {
         id,
         name: person.name,
         company: companyOf(person),
-        contract: personField(person, CONTRACT_KEYS) ?? null,
+        contract: readContract(person),
       },
     ]);
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      timersRef.current.delete(timer);
       setFeed((current) => current.filter((entry) => entry.id !== id));
     }, KILL_FEED_MS);
+    timersRef.current.add(timer);
   }, []);
 
   return [feed, push];

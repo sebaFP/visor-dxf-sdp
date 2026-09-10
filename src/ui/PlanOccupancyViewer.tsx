@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   resolvePlan,
+  toPlanOptions,
   NO_PLAN_SELECTION,
   type PlanOption,
   type PlanSelection,
+  type ProjectEntry,
 } from "../core/dxf/plan-catalog";
 import { formatZoneIds } from "../core/dxf/zones";
 import { aggregateOccupancy } from "../core/occupancy/aggregate";
@@ -11,6 +13,8 @@ import {
   filterPeople,
   hasActiveFilters,
   NO_FILTERS,
+  PEOPLE_FILTERS,
+  type PeopleFilterDef,
   type PeopleFilterState,
 } from "../core/occupancy/people-filters";
 import {
@@ -46,7 +50,9 @@ export interface PlanOccupancyViewerProps {
    */
   planUrl: string;
   /**
-   * Catálogo de planos para los desplegables «Proyecto» y «Sector».
+   * Catálogo de planos para los desplegables «Proyecto» y «Sector»: el JSON
+   * anidado del sistema (proyectos, cada uno con su `dxf` y sus `sectores`,
+   * cada uno con el suyo) o la lista plana equivalente.
    *
    * Elegir un proyecto **carga otro DXF**: no filtra personas, cambia el
    * dibujo. Las zonas son las que ese archivo traiga; una zona que no esté
@@ -55,9 +61,8 @@ export interface PlanOccupancyViewerProps {
    *   <PlanOccupancyViewer
    *     planUrl="/planos/general.dxf"
    *     plans={[
-   *       { id: "exp",     proyecto: "Expansión Nivel 320", url: "/planos/exp.dxf" },
-   *       { id: "exp-mina", proyecto: "Expansión Nivel 320", sector: "Interior Mina",
-   *         url: "/planos/exp-mina.dxf" },
+   *       { id: "exp", nombre: "Expansión Nivel 320", dxf: "/planos/exp.dxf",
+   *         sectores: [{ id: "mina", nombre: "Interior Mina", dxf: "/planos/exp-mina.dxf" }] },
    *     ]}
    *     onPlanUrlChange={setPlanUrl}
    *   />
@@ -65,7 +70,7 @@ export interface PlanOccupancyViewerProps {
    * Sin catálogo los dos desplegables salen apagados y el visor dibuja
    * `planUrl` y nada más. Ver `src/core/dxf/plan-catalog.ts`.
    */
-  plans?: readonly PlanOption[];
+  plans?: readonly ProjectEntry[] | readonly PlanOption[];
   /**
    * Aviso de que el plano dibujado cambió. Lo necesita quien traiga las
    * personas: el proveedor de ejemplo reparte gente sobre las zonas del plano
@@ -105,6 +110,17 @@ export interface PlanOccupancyViewerProps {
    * dibuja `planUrl` y muestra a todo el mundo.
    */
   showFilters?: boolean;
+  /**
+   * Desplegables de personas de la barra. Por defecto empresa y contrato; el
+   * orden es la cascada. Uno propio sobre cualquier columna conservada en
+   * `Person.extra`:
+   *
+   *   filters={[{ key: "gerencia", label: "Gerencia", allLabel: "Todas",
+   *               read: (p) => extraField(p, "GERENCIA") }]}
+   */
+  filters?: readonly PeopleFilterDef[];
+  /** Rótulo del total del panel lateral. Por defecto «Total detectadas». */
+  totalLabel?: string;
 }
 
 const NO_PLANS: readonly PlanOption[] = [];
@@ -119,15 +135,20 @@ export function PlanOccupancyViewer({
   table,
   allowFullscreen = true,
   showFilters = true,
+  filters = PEOPLE_FILTERS,
+  totalLabel,
 }: PlanOccupancyViewerProps) {
   const [selection, setSelection] = useState<Selection>(null);
   const [showBaseText, setShowBaseText] = useState(true);
-  const [filters, setFilters] = useState<PeopleFilterState>(NO_FILTERS);
+  const [filterState, setFilterState] = useState<PeopleFilterState>(NO_FILTERS);
+
+  // El catálogo puede venir anidado (como lo manda el sistema) o plano.
+  const planOptions = useMemo(() => toPlanOptions(plans), [plans]);
   const [planSelection, setPlanSelection] = useState<PlanSelection>(NO_PLAN_SELECTION);
 
   // Proyecto y sector eligen archivo, no personas: resuelven a una URL y el
   // visor descarga y parsea ese DXF. Sin nada elegido manda `planUrl`.
-  const selectedPlan = showFilters ? resolvePlan(plans, planSelection) : null;
+  const selectedPlan = showFilters ? resolvePlan(planOptions, planSelection) : null;
   const activeUrl = selectedPlan?.url ?? planUrl;
 
   const plan = usePlanQuery(activeUrl);
@@ -159,10 +180,10 @@ export function PlanOccupancyViewer({
   // El filtro se aplica antes de agregar por zona: plano, panel y modal miran
   // todos el mismo subconjunto, sin que ninguno tenga que enterarse del filtro.
   const visible = useMemo(
-    () => (showFilters ? filterPeople(people, filters) : people),
-    [people, filters, showFilters],
+    () => (showFilters ? filterPeople(people, filterState, filters) : people),
+    [people, filterState, filters, showFilters],
   );
-  const filtering = showFilters && hasActiveFilters(filters);
+  const filtering = showFilters && hasActiveFilters(filterState, filters);
 
   const occupancy = useMemo(
     () => (doc ? aggregateOccupancy(visible, doc.zoneLayers) : null),
@@ -187,7 +208,7 @@ export function PlanOccupancyViewer({
             : "Sin personas fuera del plano",
         people: occupancy.other.people,
         empty: "No hay personas en zonas fuera del plano.",
-        accent: "#f0a63c",
+        accent: DARK_THEME.otherAccent,
       };
     }
 
@@ -208,7 +229,7 @@ export function PlanOccupancyViewer({
           : `Capa ${layer.layer} — zona ${layer.zoneIds[0]}`,
       people: bucket.people,
       empty: "No hay personas detectadas en esta zona.",
-      accent: bucket.count === 0 ? "#3d4a58" : rampColor(DARK_THEME.densityRamp, share),
+      accent: bucket.count === 0 ? DARK_THEME.emptyAccent : rampColor(DARK_THEME.densityRamp, share),
     };
   }, [selection, occupancy, doc, zoneLabel]);
 
@@ -288,12 +309,13 @@ export function PlanOccupancyViewer({
 
       {showFilters && (
         <FilterBar
-          plans={plans}
+          plans={planOptions}
           planSelection={planSelection}
           onPlanSelectionChange={setPlanSelection}
           people={people}
-          filters={filters}
-          onFiltersChange={setFilters}
+          filters={filterState}
+          onFiltersChange={setFilterState}
+          filterDefs={filters}
           matched={visible.length}
         />
       )}
@@ -348,6 +370,7 @@ export function PlanOccupancyViewer({
               onSelect={setSelection}
               zoneLabel={zoneLabel}
               totalUnfiltered={filtering ? people.length : null}
+              totalLabel={totalLabel}
             />
           )}
         </aside>

@@ -1,11 +1,11 @@
 import type { Person } from "./types";
 
 /**
- * Lectura tolerante de `Person.extra`.
+ * Utilidades de lectura de valores sueltos.
  *
- * Cada sistema escribe el mismo campo a su manera —EMPRESA, empresa, nrocontrato,
- * NRO_CONTRATO— y ninguna de esas variantes merece un reporte de error. Acá se
- * comparan las claves normalizadas, así que todas caen en la misma.
+ * `normalizeKey` la usa `field-map.ts` para casar los nombres de columna del
+ * field map con las claves reales que manda el API, sin importar mayúsculas,
+ * acentos ni separadores. `textValue` y `extraField` leen valores ya mapeados.
  */
 
 /**
@@ -29,23 +29,10 @@ export function textValue(value: unknown): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-/** Primer valor no vacío de `extra` cuya clave normalizada esté en `keys`. */
-export function firstOf(
-  extra: NonNullable<Person["extra"]>,
-  keys: ReadonlySet<string>,
-): string | null {
-  for (const key of Object.keys(extra)) {
-    if (!keys.has(normalizeKey(key))) continue;
-    const value = textValue(extra[key]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-/** Lee un campo de una persona probando varias grafías. */
-export function personField(
-  person: Person,
-  keys: ReadonlySet<string>,
-): string | null {
-  return person.extra ? firstOf(person.extra, keys) : null;
+/**
+ * Lee `Person.extra[key]` por el nombre declarado en el field map
+ * (`extraField(p, "GERENCIA")`). `null` si no está o viene en blanco.
+ */
+export function extraField(person: Person, key: string): string | null {
+  return person.extra ? textValue(person.extra[key]) : null;
 }

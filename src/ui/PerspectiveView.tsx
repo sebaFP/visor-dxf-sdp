@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DxfDocument, Vec2 } from "../core/dxf/types";
-import { personField } from "../core/occupancy/extra-fields";
+import { readContract } from "../core/occupancy/person-fields";
 import type { OccupancySnapshot, Person } from "../core/occupancy/types";
 import { formatZoneLabels, RAW_ZONE_LABEL, type ZoneLabeller } from "../core/occupancy/zone-names";
 import {
@@ -35,7 +35,6 @@ import {
   UI,
   useKillFeed,
 } from "./mode-hud";
-import { CONTRACT_KEYS } from "./person-columns";
 
 /**
  * Recorrido en perspectiva del plano.
@@ -493,10 +492,12 @@ export default function PerspectiveView({
 
   const [feed, pushKill] = useKillFeed();
 
+  const defeatTimerRef = useRef(0);
   const surrender = useCallback(() => {
     setDefeated(true);
-    window.setTimeout(() => exitRef.current(), DEFEAT_MS);
+    defeatTimerRef.current = window.setTimeout(() => exitRef.current(), DEFEAT_MS);
   }, []);
+  useEffect(() => () => window.clearTimeout(defeatTimerRef.current), []);
 
   // Salir es lo único que se atiende fuera del bucle: todo lo demás se lee del
   // conjunto de teclas presionadas cuando toca avanzar el frame.
@@ -1320,7 +1321,7 @@ export default function PerspectiveView({
         const { person } = item.enemy;
         const name = person.name;
         const company = companyOf(person);
-        const contract = personField(person, CONTRACT_KEYS);
+        const contract = readContract(person);
         const tag = contract
           ? `${contract} · ${item.depth.toFixed(0)} M`
           : `${item.depth.toFixed(0)} M`;

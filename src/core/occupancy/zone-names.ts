@@ -1,4 +1,4 @@
-import { firstOf, textValue as text } from "./extra-fields";
+import { textValue as text } from "./extra-fields";
 import type { Person } from "./types";
 
 /**
@@ -13,9 +13,10 @@ import type { Person } from "./types";
  * Description and name can come from two places, in this order of authority:
  *
  *   1. The catalogue handed to the viewer (`<PlanOccupancyViewer zones={...} />`).
- *   2. The fields already riding along in `Person.extra`. If your detection
- *      system sends the zone description with each reading, zones name
- *      themselves with no extra wiring.
+ *   2. The `zoneDescription` / `zoneName` fields riding along on each `Person`
+ *      (the field map fills them from ZONA_DESCRIPCION / ZONA). If your
+ *      detection system sends the zone description with each reading, zones
+ *      name themselves with no extra wiring.
  *
  * It never returns empty: with nothing to go on, the id comes back.
  */
@@ -36,46 +37,21 @@ export type ZoneCatalog =
 /** Resolves one zone id to the string shown on screen. Never empty. */
 export type ZoneLabeller = (zoneId: string) => string;
 
-/**
- * Keys read from `Person.extra`, compared normalised (see `normalizeKey`), so
- * ZONA_DESCRIPCION, zonaDescripcion and zona-descripción are all the same key.
- * The reference schema names them ID_ZONA / ZONA / ZONA_DESCRIPCION — ID_ZONA
- * is `Person.zoneId` and never lands in `extra`.
- *
- * Deliberately zone-scoped: a bare `descripcion` would just as likely describe
- * the person.
- */
-const DESCRIPTION_KEYS = new Set([
-  "zonadescripcion",
-  "descripcionzona",
-  "zonedescription",
-  "descriptionzone",
-]);
-
-const NAME_KEYS = new Set([
-  "zona",
-  "zonanombre",
-  "nombrezona",
-  "zonename",
-  "namezone",
-  "zone",
-]);
-
 /** Identity labeller: shows the raw id. The default when nothing is configured. */
 export const RAW_ZONE_LABEL: ZoneLabeller = (zoneId) => zoneId;
 
 function lookup(catalog: ZoneCatalog | undefined, zoneId: string): ZoneInfo | undefined {
   if (!catalog) return undefined;
   if (catalog instanceof Map) return catalog.get(zoneId);
-  return (catalog as Record<string, ZoneInfo>)[zoneId];
+  const record = catalog as Record<string, ZoneInfo>;
+  // hasOwn: a zoneId like "constructor" must not pick up the prototype.
+  return Object.hasOwn(record, zoneId) ? record[zoneId] : undefined;
 }
 
 /** What one reading says about its own zone, or null if it says nothing. */
 export function zoneInfoFromPerson(person: Person): ZoneInfo | null {
-  const extra = person.extra;
-  if (!extra) return null;
-  const description = firstOf(extra, DESCRIPTION_KEYS);
-  const name = firstOf(extra, NAME_KEYS);
+  const description = text(person.zoneDescription);
+  const name = text(person.zoneName);
   return description === null && name === null ? null : { description, name };
 }
 

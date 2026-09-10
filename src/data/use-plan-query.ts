@@ -13,7 +13,7 @@ import { queryKeys } from "./query-keys";
 export function usePlanQuery(url: string) {
   return useQuery<DxfDocument>({
     queryKey: queryKeys.plan(url),
-    queryFn: () => loadDxf(url),
+    queryFn: ({ signal }) => loadDxf(url, undefined, signal),
     staleTime: Infinity,
     gcTime: Infinity,
     retry: 1,

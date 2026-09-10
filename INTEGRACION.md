@@ -1,95 +1,157 @@
 # Guía de integración
 
-Todo lo que su equipo necesita cambiar para conectar el visor al sistema real.
-Son seis puntos, en orden de importancia; los dos primeros son los
-obligatorios.
+Todo lo que su equipo necesita para conectar el visor al sistema real. En
+orden de importancia; los dos primeros puntos son los obligatorios y caben en
+diez minutos.
 
 ---
 
-## 1. De dónde salen las personas — el proveedor
+## 0. Lo mínimo: dos archivos
 
-El visor lee las personas de un contexto de React. Hoy se lo da
-`<SamplePeopleProvider>`, que genera datos falsos. Para integrar, reemplacen ese
-componente por el suyo:
+1. **`.env`** (copien `.env.example`): la URL del endpoint que devuelve las
+   filas de la vista de detección.
 
-```tsx
-// App.tsx
-<QueryClientProvider client={queryClient}>
-  <MiProveedorDePersonas>
-    <PlanOccupancyViewer planUrl="/plano.dxf" />
-  </MiProveedorDePersonas>
-</QueryClientProvider>
+   ```
+   VITE_PEOPLE_API_URL=https://su-servidor/api/personas
+   VITE_PLANS_URL=https://su-servidor/api/planos      # opcional, ver punto 5
+   ```
+
+2. **`src/data/source.ts`** → `PEOPLE_FIELD_MAP`: qué columna alimenta cada
+   campo. Ya viene con los nombres de `dbo.SDP_V_TIEMPOREAL_GOM`; si les
+   renombran una columna, se cambia el string y nada más.
+
+Con eso el visor arranca contra el API. Sin `VITE_PEOPLE_API_URL` arranca con
+datos de ejemplo, que tienen exactamente la forma que el API debe devolver.
+
+---
+
+## 1. El endpoint de personas
+
+El navegador **no habla con SQL Server**: su backend expone un endpoint HTTP
+que devuelve, en JSON, las filas de la vista. El visor las pide cada 15 s
+(`REFRESH_INTERVAL_MS`) con `fetch`, así que hace falta CORS o el mismo origen.
+
+### a) Qué devuelve
+
+Un arreglo de objetos con las columnas de la vista (también se acepta
+`{ "rows": [...] }` o `{ "data": [...] }`; para otra forma, `rowsFrom` en
+`createApiPeopleSource`). Una fila real:
+
+```json
+{
+  "FECHA": "2026-09-10T10:13:12.153",
+  "NOMBRE": "BRAVO RIQUELME CONSTANZA DANIELA",
+  "GERENCIA": "GMIN",
+  "RUT": "19.016.879-4",
+  "TAGID": "0.451.224.461",
+  "CARGO": "OPERADOR MINAS",
+  "EMPRESA": "CODELCO",
+  "CONTRATO": "",
+  "ID_ZONA": 205,
+  "ZONA": "DR/F2",
+  "ZONA_DESCRIPCION": "Diablo Rgto. Fase 2 - Producción",
+  "ID_READER": 183,
+  "READER": "P743-SDP-ESM-15.m"
+}
 ```
 
-El caso simple no necesita escribir un provider: `<PeopleProvider>` ya está
-hecho y solo pide una fuente.
+Las columnas `ID_DESDE_ZONA`, `DESDE_ZONE` y `DESDE_ZONE_DESCRIPTION` vienen
+siempre vacías y se ignoran. Cuando exista `ESPECIALIDAD`, agréguenla al
+`SELECT`: ya está mapeada y la columna de la tabla la muestra sola.
+
+### b) La vista es un log, no una foto
+
+`SDP_V_TIEMPOREAL_GOM` trae **todas las lecturas** de la última hora y pico:
+unas 11.000 filas para unas 1.700 personas, con hasta 58 lecturas por persona
+y personas en dos o tres zonas distintas. «Quién está dónde» es la **última
+lectura por persona**. Dedupliquen en SQL: pesa diez veces menos y es lo que
+el visor espera.
+
+```sql
+SELECT FECHA, NOMBRE, GERENCIA, RUT, TAGID, CARGO, EMPRESA, CONTRATO,
+       ID_ZONA, ZONA, ZONA_DESCRIPCION, ID_READER, READER
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY TAGID ORDER BY FECHA DESC) AS rn
+  FROM dbo.SDP_V_TIEMPOREAL_GOM
+) t
+WHERE rn = 1;
+```
+
+El visor deduplica igual del lado cliente (`latestOnly`, por defecto), así que
+si mandan el log completo funciona; solo baja más datos. Se partió por `TAGID`
+porque nunca es nulo; el cliente vuelve a agrupar por `RUT` (o `TAGID` si no
+hay), así que una persona con dos tags queda una sola vez.
+
+### c) Cosas de los datos que ya están resueltas
+
+- **`FECHA` no trae zona horaria.** Es la hora local del servidor
+  (`2026-09-10T10:13:12.153`). Mándenla **tal cual, sin `Z`**: el navegador la
+  interpreta en su propia zona horaria, que es la correcta mientras servidor y
+  navegador estén en Chile. Nunca le agreguen una `Z` a la hora local: la
+  columna «Permanencia» saldría corrida tres o cuatro horas. Si hay navegadores
+  en otra zona, lo limpio es mandarla con offset desde SQL
+  (`FECHA AT TIME ZONE 'Pacific SA Standard Time'`) o, como parche, fijar
+  `PEOPLE_TIME_OFFSET` en `source.ts` — ojo que Chile cambia de UTC-3 a UTC-4
+  con el horario de verano, así que un offset fijo está mal medio año.
+- **`RUT` puede ser nulo** (~6 % de las filas: el tag no tiene persona
+  asignada). Esas filas se identifican por `TAGID` y se muestran como
+  «Tag 0.451.224.461» (`PEOPLE_NAME_FALLBACK`). No se descartan: son gente en
+  la mina.
+- **`CONTRATO` es `''`** para el personal propio. La celda muestra «—» y ese
+  valor no aparece en el desplegable de contratos.
+- **`ESPECIALIDAD` todavía no existe** en la vista. Está mapeada; la columna
+  muestra «—» hasta que la agreguen. No hay que cambiar nada ese día.
+- **Nombres de columna en otra grafía** (`id_zona`, `idZona`, `Id Zona`) se
+  reconocen igual. Lo que no se reconoce se ignora, y si falta una columna
+  obligatoria (`RUT`+`TAGID`, `ID_ZONA` o `FECHA`) la fila se descarta y se
+  avisa en la consola: `[people] N fila(s) descartadas`.
+- **`FOR JSON` omite las columnas nulas.** Da lo mismo: la resolución de
+  columnas mira varias filas hasta encontrarlas todas. Si quieren filas
+  uniformes, `FOR JSON PATH, INCLUDE_NULL_VALUES`.
+- **El formato del `RUT` tiene que ser uno solo** entre filas
+  (`12.345.678-9` y `123456789` serían dos personas). Normalícenlo en SQL.
+
+### d) Cómo llega al visor
+
+`src/App.tsx` ya lo hace: con `VITE_PEOPLE_API_URL` definida monta
 
 ```tsx
-import { PeopleProvider } from "./data/people-context";
-import type { PeopleSource } from "./core/occupancy/types";
+const fuente = createApiPeopleSource({
+  url: PEOPLE_API_URL,
+  fieldMap: PEOPLE_FIELD_MAP,
+  assumeOffset: PEOPLE_TIME_OFFSET,
+  nameFallback: PEOPLE_NAME_FALLBACK,
+});
 
-const fuente: PeopleSource = {
-  label: "API detección",
-  async fetchPeople(signal) {
-    const res = await fetch("/api/personas/activas", { signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const filas: LecturaRow[] = await res.json();
-
-    return filas.map((r) => ({
-      id: r.rut,
-      name: r.nombre ?? r.rut,
-      zoneId: String(r.ID_ZONA),
-      detectedAt: r.fecha,
-      extra: {
-        gerencia: r.gerencia,
-        tag: r.tagid,
-        lector: r.reader,
-        // Con esto las zonas se muestran por nombre y no por id — ver punto 2.
-        ZONA: r.ZONA,
-        ZONA_DESCRIPCION: r.ZONA_DESCRIPCION,
-      },
-    }));
-  },
-};
-
-<PeopleProvider source={fuente} sourceId="api" refreshIntervalMs={10_000}>
-  <PlanOccupancyViewer planUrl="/plano.dxf" />
+<PeopleProvider source={fuente} sourceId="api" refreshIntervalMs={15_000}>
+  <PlanOccupancyViewer planUrl="/plano.dxf" plans={PROJECTS} />
 </PeopleProvider>;
 ```
 
-El contrato completo son dos tipos
-([`src/core/occupancy/types.ts`](src/core/occupancy/types.ts)):
+`createApiPeopleSource` (en `src/data/api-people-source.ts`) es `fetch` +
+`mapRowsToPeople`, treinta líneas; acepta `headers` y `credentials` para
+autenticación. Si su acceso no es HTTP —WebSocket, SSE, un SDK— escriban su
+propio `PeopleSource` y usen el mismo adaptador sobre lo que reciban:
 
 ```ts
-interface Person {
-  id: string;          // identidad estable (en el sistema de referencia, el RUT)
-  name: string;
-  zoneId: string;      // debe coincidir con los tokens del nombre de capa
-  detectedAt: string;  // ISO-8601
-  extra?: Record<string, string | number | null | undefined>;  // opcional, libre
-}
-
-interface PeopleSource {
-  label: string;
-  fetchPeople(signal?: AbortSignal): Promise<Person[]>;
-}
+const fuente: PeopleSource = {
+  label: "Detección",
+  async fetchPeople(signal) {
+    const filas = await miCliente.ultimasLecturas({ signal });
+    return mapRowsToPeople(filas, PEOPLE_FIELD_MAP).people;
+  },
+};
 ```
 
-`fetchPeople` recibe el `AbortSignal` de React Query: pásenlo a `fetch` y las
-peticiones obsoletas se cancelan solas.
-
-### Con WebSocket o SSE
-
-`fetchPeople` solo tiene que resolver el último estado conocido. Para un sistema
-push, guarden el snapshot y avísenle a React Query cuando cambie:
+Para un sistema push, guarden el snapshot y avísenle a React Query:
 
 ```tsx
 const queryClient = useQueryClient();
-
 useEffect(() => {
   const socket = new WebSocket("wss://…/presencia");
   socket.onmessage = (ev) => {
-    queryClient.setQueryData(queryKeys.people("tiempo-real"), mapear(JSON.parse(ev.data)));
+    const { people } = mapRowsToPeople(JSON.parse(ev.data), PEOPLE_FIELD_MAP);
+    queryClient.setQueryData(queryKeys.people("tiempo-real"), people);
   };
   return () => socket.close();
 }, [queryClient]);
@@ -97,70 +159,79 @@ useEffect(() => {
 
 Con `refreshIntervalMs={0}` desactivan el polling y queda solo el push.
 
-### Lo único que hay que respetar
+### e) Lo único que hay que respetar
 
-**`Person.zoneId` (o sea `ID_ZONA`) tiene que usar exactamente los mismos
-identificadores que los nombres de capa del DXF.** Si la capa se llama `81-82`,
-el visor busca personas con `zoneId === "81"` o `zoneId === "82"`. Son strings:
-`"85"` no es `85`.
+**`ID_ZONA` tiene que usar los mismos identificadores que los nombres de capa
+del DXF.** Si la capa se llama `81-82`, el visor busca personas con zona `81`
+o `82`. El adaptador convierte el número a texto; `85` y `"85"` son lo mismo.
 
-Esto vale para el cruce y solo para el cruce. Lo que se muestra en pantalla es
-el nombre de la zona, no el id — ver el punto 2.
+Cualquier zona que no corresponda a una capa dibujada cae en **«Otras zonas»**:
+no se pierde ni se descarta. Ese panel es el primer lugar donde mirar si un
+conteo no cuadra.
 
-Cualquier `zoneId` que no corresponda a una capa dibujada cae en **"Otras
-zonas"** — no se pierde ni se descarta. Ese panel es el primer lugar donde mirar
-si un conteo no cuadra.
+### f) Cuando terminen
 
-### Cuando terminen
-
-Borren `src/data/sample-people-provider.tsx` y `src/data/mock-people-source.ts`.
-No los importa nada más que `App.tsx`.
+Borren `src/data/sample-people-provider.tsx` y `src/data/mock-people-source.ts`
+y la rama sin API de `App.tsx`. Nada más los importa.
 
 ---
 
-## 2. Cómo se llaman las zonas — `zones`
+## 2. Renombrar columnas — `PEOPLE_FIELD_MAP`
 
-El plano solo conoce identificadores: la capa `85` es la zona `"85"` y nada más.
-Un id no le dice nada a quien mira la pantalla, así que **todo lo que se muestra
-pasa por un resolvedor** que intenta, en este orden:
+El contrato entre sus datos y el visor es un objeto en `src/data/source.ts`:
+
+| Campo             | Columna (por defecto) | Dónde se ve                                   |
+| ----------------- | --------------------- | --------------------------------------------- |
+| `id`              | `RUT`                 | identidad de la fila; no se muestra           |
+| `idFallback`      | `TAGID`               | identidad cuando `RUT` viene nulo             |
+| `name`            | `NOMBRE`              | columna «Nombre»                              |
+| `zoneId`          | `ID_ZONA`             | cruce con las capas del DXF                   |
+| `detectedAt`      | `FECHA`               | «Detección», «Permanencia», orden de la tabla |
+| `company`         | `EMPRESA`             | columna y filtro «Empresa»                    |
+| `contract`        | `CONTRATO`            | columna y filtro «Contrato»                   |
+| `role`            | `CARGO`               | columna «Cargo»                               |
+| `specialty`       | `ESPECIALIDAD`        | columna «Especialidad»                        |
+| `zoneName`        | `ZONA`                | rótulo de zona cuando no hay descripción      |
+| `zoneDescription` | `ZONA_DESCRIPCION`    | rótulo de zona                                |
+| `extra`           | `GERENCIA`, `TAGID`, `READER` | quedan en `Person.extra` con ese nombre |
+
+Los tipos viven en `src/core/occupancy/field-map.ts` (`PersonFieldMap`,
+`mapRowsToPeople`) y `src/core/occupancy/types.ts` (`Person`). Ninguno importa
+React: sirven desde cualquier código.
+
+```ts
+interface Person {
+  id: string;             // RUT, o TAGID cuando no hay persona asignada
+  name: string;
+  zoneId: string;         // el token de la capa del DXF
+  detectedAt: string;     // ISO-8601 en UTC, siempre con la misma forma
+  company?: string | null;
+  contract?: string | null;
+  role?: string | null;
+  specialty?: string | null;
+  zoneName?: string | null;
+  zoneDescription?: string | null;
+  extra?: Record<string, string | number | null | undefined>;
+}
+```
+
+---
+
+## 3. Cómo se llaman las zonas
+
+El plano solo conoce identificadores: la capa `85` es la zona `"85"` y nada
+más. Un id no le dice nada a quien mira la pantalla, así que **todo lo que se
+muestra pasa por un resolvedor** que intenta, en este orden:
 
 ```
 descripción  →  nombre  →  id
 ```
 
-Hay dos formas de darle esos datos, y funcionan juntas.
-
 ### a) Ya vienen en las lecturas — no hay que hacer nada
 
-Su esquema trae `ID_ZONA`, `ZONA` y `ZONA_DESCRIPCION`. Con mapearlos así ya
-está todo hecho:
-
-```ts
-return filas.map((r) => ({
-  id: r.rut,
-  name: r.nombre ?? r.rut,
-  zoneId: String(r.ID_ZONA),        // ← lo que se cruza con las capas del DXF
-  detectedAt: r.fecha,
-  extra: {
-    ZONA: r.ZONA,                   // ← nombre
-    ZONA_DESCRIPCION: r.ZONA_DESCRIPCION,  // ← descripción, la que se muestra
-  },
-}));
-```
-
-`ID_ZONA` va en `zoneId` porque es lo que ata la persona al plano. Los otros dos
-van en `extra` tal cual: el visor los busca ahí y rotula la zona con ellos.
-
-**La comparación de claves ignora mayúsculas, guiones, espacios y acentos**, así
-que `ZONA_DESCRIPCION`, `zonaDescripcion`, `zona_descripcion` y
-`"Zona Descripción"` son la misma cosa. Las formas que reconoce:
-
-| Campo       | Claves aceptadas en `extra` (en cualquier grafía)                  |
-| ----------- | ------------------------------------------------------------------ |
-| descripción | `ZONA_DESCRIPCION`, `DESCRIPCION_ZONA`, `zoneDescription`          |
-| nombre      | `ZONA`, `ZONA_NOMBRE`, `NOMBRE_ZONA`, `zoneName`, `zone`           |
-
-Un valor vacío o en blanco cuenta como ausente y cae al siguiente escalón.
+`ZONA` y `ZONA_DESCRIPCION` llegan en cada fila; el field map las pone en
+`zoneName` y `zoneDescription`, y el visor rotula la zona con ellas. Es lo que
+pasa con la vista de referencia sin configurar nada.
 
 ### b) Un catálogo explícito — `zones`
 
@@ -183,79 +254,37 @@ recurso, así que una zona nunca queda sin rótulo.
 
 Los ids crudos no desaparecen: siguen en el subtítulo del modal, en la segunda
 línea del panel lateral y en el tooltip de la insignia, que es donde sirven para
-cruzar con el sistema de detección.
-
-Todo esto son ~40 líneas en
+cruzar con el sistema de detección. Todo esto son ~40 líneas en
 [`src/core/occupancy/zone-names.ts`](src/core/occupancy/zone-names.ts).
 
 ---
 
-## 3. Qué muestra la tabla — `src/ui/person-columns.ts`
+## 4. Qué muestra la tabla — `src/ui/person-columns.ts`
 
 Hoy la tabla muestra nombre, cargo, especialidad, empresa, contrato, zona y
-fecha y hora de detección, `10-09-26 09:34` (más permanencia, calculada). La
-hora sola no bastaba: alguien detectado ayer a las 09:34 se leía idéntico a
-alguien de hoy. El RUT **no** se muestra: sigue siendo
-`Person.id`, la identidad del registro, pero no aporta nada a quien mira una zona
-en pantalla.
-
-`cargo`, `especialidad`, `empresa` y `contrato` salen de `Person.extra`; si su
-fuente no los trae, esas celdas muestran `—`. Cargo y especialidad se ocultan
+fecha y hora de detección (`10-09-26 09:34`), más permanencia, calculada. El
+RUT no se muestra: sigue siendo `Person.id`, la identidad del registro, pero no
+aporta nada a quien mira una zona en pantalla. Cargo y especialidad se ocultan
 bajo el breakpoint `md`, donde no cabrían siete columnas.
 
-**No hace falta renombrar nada al mapear.** El mismo dato viaja con nombre
-distinto según de dónde salga —el maestro de personas los llama `empresa` y
-`nrocontrato`, la sábana de turnos `empresa` y `contrato`, y los endpoints de
-ubicación emiten además `EMPRESA` y `CONTRATO` en mayúsculas—, así que la tabla
-compara las claves normalizadas, igual que hace con las de zona:
+Los campos tipados se leen con `readRole`, `readSpecialty`, `readCompany` y
+`readContract` (`src/core/occupancy/person-fields.ts`); un campo que su fuente
+no trae muestra «—». Para mostrar otra columna del API:
 
-| Campo        | Claves aceptadas en `extra` (en cualquier grafía)                                          |
-| ------------ | ------------------------------------------------------------------------------------------ |
-| cargo        | `CARGO`, `NOMBRE_CARGO`, `CARGO_NOMBRE`, `DESCRIPCION_CARGO`, `PUESTO`, `role`, `position`   |
-| especialidad | `ESPECIALIDAD`, `NOMBRE_ESPECIALIDAD`, `DESCRIPCION_ESPECIALIDAD`, `DISCIPLINA`, `specialty` |
-| empresa      | `EMPRESA`, `NOMBRE_EMPRESA`, `EMPRESA_NOMBRE`, `RAZON_SOCIAL`, `company`                     |
-| contrato     | `CONTRATO`, `NROCONTRATO`, `N_CONTRATO`, `NUMERO_CONTRATO`, `ID_CONTRATO`, `contract`        |
-
-Mayúsculas, guiones bajos, espacios y acentos dan lo mismo: `NRO_CONTRATO`,
-`nroContrato` y `"nro contrato"` son la misma clave. Un valor en blanco cuenta
-como ausente y la celda muestra `—`.
-
-Los conjuntos de claves están declarados en
-[`src/core/occupancy/person-fields.ts`](src/core/occupancy/person-fields.ts) —
-no en las columnas — porque los desplegables de empresa y contrato leen los
-mismos campos, y un campo declarado dos veces se desincroniza a la primera
-grafía nueva. `person-columns.ts` los reexporta, así que el import de siempre
-sigue andando.
-
-Ojo con una diferencia que no es del visor: la razón social de la sábana de
-turnos y el nombre corto del maestro de personas **no son el mismo string**
-(`INGENIERIA Y CONSTRUCCIONES MAS ERRAZURIZ LTDA.,` frente a `MAS ERRAZURIZ`).
-Elijan una fuente y quédense con ella, o la columna mezclará las dos formas.
-
-Para agregar un campo:
-
-1. Póngalo en `Person.extra` desde su `PeopleSource`.
-2. Agregue una entrada a `PERSON_COLUMNS`:
+1. Agreguen su nombre a `PEOPLE_FIELD_MAP.extra` (si no está ya).
+2. Agreguen una entrada a `PERSON_COLUMNS`:
 
 ```ts
+import { extraField } from "../core/occupancy/extra-fields";
+
 export const PERSON_COLUMNS: PersonColumn[] = [
   { key: "name",     header: "Nombre",   value: (p) => p.name },
-  { key: "cargo",    header: "Cargo",    value: (p) => personField(p, ROLE_KEYS) ?? "—", secondary: true },
-  { key: "especialidad", header: "Especialidad", value: (p) => personField(p, SPECIALTY_KEYS) ?? "—", secondary: true },
-  { key: "empresa",  header: "Empresa",  value: (p) => personField(p, COMPANY_KEYS) ?? "—" },
-  { key: "contrato", header: "Contrato", value: (p) => personField(p, CONTRACT_KEYS) ?? "—", variant: "mono", width: "7.5rem" },
-  { key: "zoneId",   header: "Zona",     value: (p, ctx) => ctx.zoneLabel(p.zoneId), variant: "chip" },
-
+  { key: "cargo",    header: "Cargo",    value: (p) => readRole(p) ?? "—", secondary: true },
+  …
   // agregado:
-  { key: "gerencia", header: "Gerencia", value: (p) => String(p.extra?.gerencia ?? "—") },
+  { key: "gerencia", header: "Gerencia", value: (p) => extraField(p, "GERENCIA") ?? "—" },
 ];
 ```
-
-`personField(person, claves)` es el lector tolerante de
-[`src/core/occupancy/extra-fields.ts`](src/core/occupancy/extra-fields.ts):
-devuelve el primer valor no vacío cuya clave normalizada esté en el conjunto, y
-`null` si no hay ninguno. Úsenlo cuando su campo pueda llegar con más de una
-grafía; para uno con nombre fijo basta `p.extra?.loQueSea`.
 
 `variant` decide cómo se pinta la celda: `text` (por defecto), `mono`
 (monoespaciado y a la derecha, para códigos y horas) o `chip` (pastilla, para
@@ -264,15 +293,10 @@ sobrante. `secondary: true` la oculta en pantallas chicas. El filtro del modal
 busca sobre todas las columnas declaradas, sin configuración extra.
 
 El segundo argumento (`ctx`) es lo que la columna no puede deducir sola. Hoy
-tiene un solo campo, `zoneLabel`, el resolvedor de nombres de zona del punto 2.
-Ignórenlo si su columna no lo necesita.
-
-La columna de iniciales y la de permanencia no salen de acá: son fijas.
+tiene un solo campo, `zoneLabel`, el resolvedor de nombres de zona del punto 3.
 
 El contador del encabezado del modal sigue al filtro: muestra cuántas filas
 quedan visibles y, cuando hay filtro puesto, agrega «de N personas en total».
-La tabla lo avisa con `onVisibleCountChange`; una tabla propia que no lo llame
-deja el contador en el total, sin romper nada.
 
 ### Usar otra tabla completa — `table`
 
@@ -301,16 +325,11 @@ interface PeopleTableProps {
 }
 ```
 
-La tabla del repo cumple esa firma, así que es literalmente intercambiable. El
-modal, su encabezado, el conteo y el cierre siguen siendo del visor: ustedes
-solo ponen lo de adentro.
-
 ---
 
-## 4. La barra de arriba — proyecto, sector, empresa, contrato
+## 5. La barra de arriba — proyecto, sector, empresa, contrato
 
-Cuatro desplegables que se ven iguales y hacen **dos cosas distintas**. Conviene
-tenerlo claro antes de tocarlos:
+Cuatro desplegables que se ven iguales y hacen **dos cosas distintas**:
 
 | Desplegable | Qué hace                    | Dónde vive                                |
 | ----------- | --------------------------- | ----------------------------------------- |
@@ -325,184 +344,129 @@ depende de la empresa— y entre pares no hay relación.
 ### a) Proyecto y sector — el catálogo de planos
 
 Elegir un proyecto **cambia el dibujo**: el visor descarga y parsea otro DXF.
-Las zonas son las que ese archivo traiga; no hay que declarar en ninguna parte
-qué zona pertenece a qué proyecto. Una zona que no esté dibujada en el plano
-cargado cae en «Otras zonas», exactamente como siempre.
+Las zonas son las que ese archivo traiga; una zona que no esté dibujada en el
+plano cargado cae en «Otras zonas», exactamente como siempre.
 
-El catálogo es una lista plana:
+El catálogo es el JSON del sistema: un arreglo de proyectos, cada uno con su
+`dxf` (el plano general, el que se dibuja sin sector elegido) y sus
+`sectores`, cada uno con el suyo. `id` es opcional.
 
-```tsx
-import type { PlanOption } from "./core/dxf/plan-catalog";
-
-const PLANS: PlanOption[] = [
-  // Sin `sector`: el plano general del proyecto.
-  { id: "exp",      proyecto: "Expansión Nivel 320",     url: "/planos/exp.dxf" },
-  { id: "exp-mina", proyecto: "Expansión Nivel 320",     sector: "Interior Mina",
-    url: "/planos/exp-mina.dxf" },
-  { id: "exp-plta", proyecto: "Expansión Nivel 320",     sector: "Planta",
-    url: "/planos/exp-planta.dxf" },
-  { id: "cont",     proyecto: "Continuidad Operacional", url: "/planos/cont.dxf" },
-];
-
-<PlanOccupancyViewer planUrl="/plano.dxf" plans={PLANS} />;
+```json
+[
+  { "id": "exp", "nombre": "Expansión Nivel 320", "dxf": "/planos/exp.dxf",
+    "sectores": [
+      { "id": "mina",   "nombre": "Interior Mina", "dxf": "/planos/exp-mina.dxf" },
+      { "id": "planta", "nombre": "Planta",        "dxf": "/planos/exp-planta.dxf" }
+    ] },
+  { "id": "cont", "nombre": "Continuidad Operacional", "dxf": "/planos/cont.dxf" }
+]
 ```
 
-Las reglas de resolución, todas en un archivo de ~30 líneas:
+Puede venir de un endpoint (`VITE_PLANS_URL` en `.env`; `usePlansQuery` lo
+descarga una vez y lo valida) o ir escrito en `PROJECTS`, en
+`src/data/source.ts`. `<PlanOccupancyViewer plans={…} />` acepta esa forma
+anidada o la lista plana `PlanOption[]` equivalente.
 
-- **Sin proyecto elegido** se dibuja el `planUrl` que recibe el visor. Es el
-  estado inicial: el plano general de la faena.
-- **Con proyecto y sin sector** gana la entrada sin `sector` de ese proyecto. Si
-  el proyecto no tiene una, se toma su primer plano — mejor que dejar el lienzo
-  en blanco esperando que elijan un sector.
-- **Cambiar de proyecto limpia el sector.** Los sectores de un proyecto no
-  existen en otro, y dejarlo puesto apuntaría a un plano que no está en la lista.
-- **Sin proyecto elegido no se ofrecen sectores.** Un sector solo significa algo
-  dentro de su proyecto; mezclarlos daría una lista donde dos «Norte» de
-  proyectos distintos se ven idénticos.
-- **Sin catálogo** los dos desplegables salen apagados, no vacíos: se ve de
-  inmediato que no hay nada configurado y no parece que estén rotos.
+Las reglas, todas en `plan-catalog.ts`:
 
-Al cambiar el plano, la zona que estuviera abierta se deselecciona: puede no
-existir en el archivo nuevo.
+- **Sin proyecto elegido** se dibuja el `planUrl` que recibe el visor.
+- **Con proyecto y sin sector** se dibuja el `dxf` del proyecto.
+- **Cambiar de proyecto limpia el sector.**
+- **Sin proyecto elegido no se ofrecen sectores.**
+- **Sin catálogo** los dos desplegables salen apagados, no vacíos.
 
-#### Si su fuente de personas depende del plano
+Al cambiar el plano, la zona que estuviera abierta se deselecciona.
 
-El visor avisa cada vez que cambia el DXF dibujado:
-
-```tsx
-const [planUrl, setPlanUrl] = useState(PLAN_URL);
-
-<SamplePeopleProvider planUrl={planUrl}>
-  <PlanOccupancyViewer planUrl={PLAN_URL} plans={PLANS} onPlanUrlChange={setPlanUrl} />
-</SamplePeopleProvider>;
-```
-
-`onPlanUrlChange(url, plan)` entrega también la entrada elegida, así que una
-fuente real puede pedir solo las personas de ese proyecto o sector en vez de
-traerlas todas. Si su API no depende del plano, ignórenlo: es opcional.
+`onPlanUrlChange(url, plan)` avisa cada vez que cambia el DXF dibujado, por si
+su fuente de personas quiere pedir solo las de ese proyecto. La fuente del
+punto 1 no depende del plano y lo ignora.
 
 ### b) Empresa y contrato — el filtro de personas
 
-Estos sí filtran gente, y lo hacen **antes** de repartirla por zona: el plano,
-los conteos del panel lateral y la tabla del modal miran siempre el mismo
-subconjunto. No hay forma de que uno diga una cosa y otro diga otra.
+Filtran gente **antes** de repartirla por zona: el plano, los conteos del
+panel y la tabla del modal miran siempre el mismo subconjunto.
 
-No hay que configurarlos. Se llenan solos con lo que traigan las lecturas en
-`Person.extra`, con las mismas grafías tolerantes del punto 3 (`EMPRESA`,
-`NOMBRE_EMPRESA`, `RAZON_SOCIAL`; `CONTRATO`, `NROCONTRATO`, `ID_CONTRATO`…).
-Son los mismos campos que muestran las columnas de la tabla: están declarados
-una sola vez, en
-[`src/core/occupancy/person-fields.ts`](src/core/occupancy/person-fields.ts).
-
-Con nada puesto, **«Empresa» lista las empresas de todos los datos**; elegida
-una, **«Contrato» ofrece solo los contratos de esa empresa**. Sin la cascada el
-segundo desplegable ofrecería códigos que no dan ninguna fila. Cambiar de
-empresa limpia el contrato, por lo mismo.
-
-Un campo que su fuente no manda deja su desplegable apagado.
+No hay que configurarlos: se llenan con `person.company` y `person.contract`.
+Con nada puesto, «Empresa» lista las empresas de todos los datos; elegida una,
+«Contrato» ofrece solo los contratos de esa empresa. Cambiar de empresa limpia
+el contrato. Un campo que su fuente no manda deja su desplegable apagado.
 
 El panel lateral avisa que hay filtro: «Total detectadas» muestra `340 de 1652`.
-La barra agrega un «Limpiar filtros» mientras haya algo puesto.
-
-### Apagar la barra entera
-
-```tsx
-<PlanOccupancyViewer planUrl="/plano.dxf" showFilters={false} />
-```
-
-Dibuja `planUrl` y muestra a todo el mundo.
 
 ### Agregar o cambiar un filtro de personas
 
-La lista vive en
-[`src/core/occupancy/people-filters.ts`](src/core/occupancy/people-filters.ts) y
-es literalmente un arreglo. El orden del arreglo **es** el orden de la cascada:
+El visor recibe la lista por prop; el orden **es** el orden de la cascada:
 
-```ts
-export const PEOPLE_FILTERS: readonly PeopleFilterDef[] = [
-  { key: "empresa",  label: "Empresa",  allLabel: "Todas", read: readCompany },
-  { key: "contrato", label: "Contrato", allLabel: "Todos", read: readContract },
-];
+```tsx
+import { PEOPLE_FILTERS } from "./core/occupancy/people-filters";
+import { extraField } from "./core/occupancy/extra-fields";
+
+<PlanOccupancyViewer
+  planUrl="/plano.dxf"
+  filters={[
+    ...PEOPLE_FILTERS,
+    { key: "gerencia", label: "Gerencia", allLabel: "Todas",
+      read: (p) => extraField(p, "GERENCIA") },
+  ]}
+/>;
 ```
 
-`allLabel` es cómo se llama «sin filtrar» en ese desplegable. `read` es
-cualquier función `(person) => string | null`: para un campo con nombre fijo
-basta `(p) => textValue(p.extra?.turno)`; para uno que puede llegar con varias
-grafías, `personField(p, MIS_CLAVES)`.
-
-Ambos módulos son puros y no importan React: `filterPeople`,
-`buildFilterOptions`, `resolvePlan` y compañía se pueden usar desde su propio
-código si arman la barra por su cuenta.
+`read` es cualquier `(person) => string | null`. Con `showFilters={false}` no
+hay barra: dibuja `planUrl` y muestra a todo el mundo.
 
 ---
 
-## 5. El componente y su caché
+## 6. El componente y su caché
 
 `<PlanOccupancyViewer>` es lo que montan. Su API completa:
 
 ```tsx
 interface PlanOccupancyViewerProps {
-  planUrl: string;               // DXF por defecto, sin proyecto elegido
-  plans?: readonly PlanOption[]; // catálogo de proyecto/sector; ver punto 4
+  planUrl: string;                       // DXF por defecto, sin proyecto elegido
+  plans?: ProjectEntry[] | PlanOption[]; // catálogo de proyecto/sector; punto 5
   onPlanUrlChange?: (url: string, plan: PlanOption | null) => void;
-  title?: string | null;         // null oculta la cabecera y deja plano + panel
+  title?: string | null;                 // null oculta la cabecera
   className?: string;
-  zones?: ZoneCatalog;           // nombres de zona; ver punto 2
-  table?: PeopleTableComponent;  // otra tabla para el modal; ver punto 3
-  allowFullscreen?: boolean;     // botón de pantalla completa (por defecto true)
-  showFilters?: boolean;         // barra de arriba; ver punto 4 (por defecto true)
+  zones?: ZoneCatalog;                   // nombres de zona; punto 3
+  table?: PeopleTableComponent;          // otra tabla para el modal; punto 4
+  filters?: PeopleFilterDef[];           // desplegables de personas; punto 5
+  totalLabel?: string;                   // rótulo del total del panel lateral
+  allowFullscreen?: boolean;             // botón de pantalla completa (true)
+  showFilters?: boolean;                 // barra de arriba (true)
 }
 ```
 
 Requiere un `<QueryClientProvider>` y un `<PeopleProvider>` por encima. Si falta
-el segundo, `usePeople()` tira un error que lo dice explícitamente en vez de
-renderizar vacío.
+el segundo, `usePeople()` tira un error que lo dice explícitamente.
 
 ### Pantalla completa
 
-El botón de la cabecera expande **el componente**, no la pestaña: pide
-`requestFullscreen()` sobre su propio nodo raíz, así que el visor embebido en
-una página ajena se lleva a pantalla completa su cabecera, su panel lateral y su
-modal, y nada más. Se sale con el mismo botón o con Escape.
-
-Dos cosas a tener presentes:
-
-- El estado del botón se lee del documento (`fullscreenchange`), no se guarda al
-  pedirlo. Es lo único que se entera de que el usuario salió con Escape o de que
-  el navegador rechazó la petición.
-- **Dentro de un `<iframe>` hace falta `allow="fullscreen"`.** Sin eso
-  `document.fullscreenEnabled` es `false` y el botón directamente no se dibuja,
-  en vez de quedar ahí sin hacer nada.
-
-Con `allowFullscreen={false}` no aparece nunca. Con `title={null}` no hay
-cabecera donde ponerlo, así que flota sobre el plano arriba a la derecha.
+El botón de la cabecera expande **el componente**, no la pestaña. Dentro de un
+`<iframe>` hace falta `allow="fullscreen"`; sin eso el botón no se dibuja.
+Con `allowFullscreen={false}` no aparece nunca.
 
 ### Controles del plano
 
-Abajo a la derecha del plano hay un panel de cámara: acercar, alejar, ajustar al
-plano completo y centrar en la zona seleccionada, más un indicador de zoom. El
-indicador es relativo al encuadre completo (`1×` = todo el plano en pantalla) y
-no un porcentaje, porque un DXF está en unidades de mundo y un "100%" no
-significaría nada.
+Abajo a la derecha: acercar, alejar, ajustar al plano completo y centrar en la
+zona seleccionada, con indicador de zoom relativo al encuadre completo. Por
+teclado, con el plano enfocado: `+` / `−`, `0`, `F`.
 
-Los mismos comandos por teclado cuando el plano tiene el foco: `+` / `−` para
-zoom, `0` para ajustar, `F` para centrar en la zona seleccionada. Son atajos del
-contenedor del plano y no del documento, así que nunca le roban una tecla al
-filtro de la tabla ni a un input de su aplicación.
+Al alejar el zoom, las insignias de conteo que se amontonan **se agrupan en
+una sola** con la suma de personas distintas y la leyenda «N zonas agrupadas»
+(doble borde). Ninguna persona deja de contarse. Un clic en una insignia
+agrupada acerca la cámara hasta que se separan; la zona seleccionada nunca se
+absorbe en un grupo. La lógica está en `src/core/render/badge-clusters.ts`.
 
-Las claves de query viven en [`src/data/query-keys.ts`](src/data/query-keys.ts).
-Están centralizadas para que dos consumidores del mismo dato compartan caché sin
-coordinarse: es lo que permite que el proveedor de ejemplo lea el plano ya
-parseado por el visor en vez de descargar 13 MB dos veces. Si escriben su propio
-proveedor y necesitan las zonas del plano, usen `usePlanQuery(planUrl)` y
-obtienen lo mismo gratis.
+### Caché
 
-El plano usa `staleTime: Infinity` a propósito: un DXF no cambia bajo los pies.
-Si cambia, cambia su URL.
+Las claves de query viven en `src/data/query-keys.ts`. Están centralizadas para
+que dos consumidores del mismo dato compartan caché: es lo que permite que el
+proveedor de ejemplo lea el plano ya parseado por el visor. El plano usa
+`staleTime: Infinity`: un DXF no cambia bajo los pies; si cambia, cambia su URL.
 
 ---
 
-## 6. Si su convención de capas es distinta — `src/core/dxf/zones.ts`
+## 7. Si su convención de capas es distinta — `src/core/dxf/zones.ts`
 
 Todo el conocimiento sobre nombres de capa está en un archivo de ~20 líneas:
 
@@ -517,10 +481,34 @@ export function parseZoneLayer(layer: string): string[] | null {
 ```
 
 Devolver `null` significa "esta capa no es una zona" y se ignora. Si su plano
-usa, por ejemplo, `ZONA_85` o separa con `_`, es acá y en ningún otro lado.
+usa, por ejemplo, `ZONA_85` o separa con `_`, es acá y en ningún otro lado. Las
+capas ignoradas quedan listadas en `doc.ignoredLayers`.
 
-Las capas ignoradas quedan listadas en `doc.ignoredLayers`, útil para depurar un
-plano nuevo.
+---
+
+## 8. Los recorridos (modo oculto)
+
+Además del plano, el repo trae dos **recorridos** sobre el DXF: uno en primera
+persona (`src/ui/PerspectiveView.tsx`) y uno cenital por rondas
+(`src/ui/OverheadView.tsx`), con un HUD común (`src/ui/mode-hud.tsx`) y su
+motor en `src/core/render/perspective.ts`, `placement.ts` y `sprites.ts`. Usan
+el mismo `DxfDocument`, la misma ocupación (ya filtrada) y los mismos nombres
+de zona que el plano.
+
+No están en la interfaz: se abren con una secuencia de teclas **con el plano
+enfocado** (un clic sobre él):
+
+- `↑ ↑ ↓ ↓ ← → ← → B A` → recorrido en perspectiva
+- `↑ ↑ ↓ ↓ ← → ← → A B` → recorrido cenital
+
+`Escape` vuelve al plano. Se cargan por `lazy()` en chunks aparte, así que no
+pesan en el bundle de quien solo mira el plano (~8 kB gzip cada uno, solo al
+abrirlos).
+
+Son opcionales. Para sacarlos del todo: borren los seis archivos de arriba y,
+en `src/ui/PlanCanvas.tsx`, los dos `lazy(...)`, el estado `mode`, las
+constantes `SEQUENCE_PREFIX`/`MODE_SEQUENCES` y el bloque `{mode && …}` del
+JSX. `tsc` señala cualquier resto.
 
 ---
 
@@ -532,44 +520,48 @@ es React Query). La superficie que necesita es:
 
 ```ts
 import { loadDxf } from "./core/dxf/parse-dxf";
+import { mapRowsToPeople } from "./core/occupancy/field-map";
 import { aggregateOccupancy } from "./core/occupancy/aggregate";
 import { PlanRenderer } from "./core/render/plan-renderer";
 import { fitBounds, screenToWorld, panBy, zoomAt } from "./core/render/viewport";
 
 const doc = await loadDxf("/plano.dxf");
-const snapshot = aggregateOccupancy(personas, doc.zoneLayers);
+const { people } = mapRowsToPeople(filasDelApi, PEOPLE_FIELD_MAP);
+const snapshot = aggregateOccupancy(people, doc.zoneLayers);
 
 const renderer = new PlanRenderer(doc);          // una vez por documento
 renderer.render(ctx, { viewport, width, height, zoneStyles, showBaseText });
 const capa = renderer.hitTest(mundo);            // clic → nombre de capa | null
 ```
 
-`PlanRenderer` recibe un `CanvasRenderingContext2D` y nada más: no conoce React,
-ni el DOM más allá del canvas, ni de dónde vienen los datos.
-
-Los colores están todos en `src/core/render/theme.ts` (`PlanTheme`), incluida la
-rampa de densidad. Pásele otro tema al constructor y listo.
+Los colores están todos en `src/core/render/theme.ts` (`PlanTheme`), incluida
+la rampa de densidad. Pásele otro tema al constructor y listo.
 
 ---
 
 ## Rendimiento — lo que conviene no romper
 
-Medido sobre `public/plano.dxf` (13 MB, 35.046 entidades):
+Medido sobre `public/plano.dxf` (13 MB, 35.046 entidades) y sobre 9.381 filas
+reales de la vista:
 
-| Paso                        | Costo             |
-| --------------------------- | ----------------- |
-| Descarga + parseo           | ~200 ms, una vez  |
-| Horneado de `Path2D`        | ~50 ms, una vez   |
-| Frame de pan/zoom           | pocos ms          |
-| Agregación de 240 personas  | despreciable      |
+| Paso                              | Costo             |
+| --------------------------------- | ----------------- |
+| Descarga + parseo del DXF         | ~200 ms, una vez  |
+| Horneado de `Path2D`              | ~50 ms, una vez   |
+| Frame de pan/zoom                 | pocos ms          |
+| `mapRowsToPeople` de 9.381 filas  | ~66 ms            |
+| Agregación de 1.500 personas      | despreciable      |
 
-Las dos cosas que sostienen esto:
+Lo que sostiene esto:
 
 1. **El horneado ocurre una vez por documento**, no por frame. `PlanRenderer` se
-   construye dentro de un `useMemo` sobre `doc`. Si lo reconstruye en cada
-   render, el visor se arrastra.
-2. **El texto se recorta por viewport y por tamaño en pantalla.** Dibujar 3.795
-   textos sin filtrar cuesta cientos de ms por frame.
+   construye dentro de un `useMemo` sobre `doc`.
+2. **El texto se recorta por viewport y por tamaño en pantalla.**
+3. **Los campos de `Person` son tipados.** Filtros, columnas y rótulos leen
+   `person.company`, no buscan entre claves: el costo por refresco es lineal en
+   personas, no en personas × columnas.
+4. **Deduplicar en SQL.** El cliente lo hace igual, pero 1.500 filas cada 15 s
+   son mejor que 11.000.
 
-El parseo es síncrono y no toca el DOM: si el bloqueo inicial molesta, mueva
-`parseDxf` a un Web Worker sin tocar nada más.
+El parseo del DXF es síncrono y no toca el DOM: si el bloqueo inicial molesta,
+mueva `parseDxf` a un Web Worker sin tocar nada más.
